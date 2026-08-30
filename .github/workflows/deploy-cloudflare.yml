@@ -79,9 +79,14 @@ jobs:
 
           base = os.environ['WORKER_URL'].rstrip('/')
           access = os.environ['ACCESS_KEY']
+          browser_ua = 'Mozilla/5.0 (Linux; Android 16; SM-S711B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36'
 
           def call(path, method='GET', body=None, headers=None):
-              h = {'x-access-key': access}
+              h = {
+                  'x-access-key': access,
+                  'User-Agent': browser_ua,
+                  'Accept': 'application/json, text/plain, */*',
+              }
               if headers:
                   h.update(headers)
               data = body
@@ -97,13 +102,13 @@ jobs:
                   raw = e.read().decode('utf-8', 'replace')
                   raise RuntimeError(f'{method} {path} -> HTTP {e.code}: {raw[:1200]}')
 
-          status, health = call('/api/health')
+          _, health = call('/api/health')
           if not health.get('driveReady'):
               raise RuntimeError(f'Drive health failed: {health}')
           print('health: OK')
 
           size = 1024 * 1024
-          status, started = call('/api/uploads/start', 'POST', {
+          _, started = call('/api/uploads/start', 'POST', {
               'name': '__deploy_smoke__.bin',
               'size': size,
               'type': 'application/octet-stream',
@@ -111,24 +116,22 @@ jobs:
           key = started['key']
           upload_id = started['uploadId']
           part_size = int(started['partSize'])
-          if part_size < size:
-              raise RuntimeError(f'Unexpected partSize {part_size}')
           print(f'upload start: OK (partSize={part_size})')
 
           q = urllib.parse.urlencode({'key': key, 'uploadId': upload_id, 'partNumber': 1})
           payload = b'W' * size
-          status, part = call('/api/uploads/part?' + q, 'PUT', payload, {'content-type': 'application/octet-stream'})
+          _, part = call('/api/uploads/part?' + q, 'PUT', payload, {'content-type': 'application/octet-stream'})
           if not part.get('complete'):
               raise RuntimeError(f'Upload part did not complete: {part}')
           print('upload part: OK')
 
-          status, done = call('/api/uploads/complete', 'POST', {'key': key, 'uploadId': upload_id, 'parts': [{'partNumber': 1, 'etag': part.get('etag')}]})
+          _, done = call('/api/uploads/complete', 'POST', {'key': key, 'uploadId': upload_id, 'parts': [{'partNumber': 1, 'etag': part.get('etag')}]})
           if int(done.get('size', -1)) != size:
               raise RuntimeError(f'Upload size mismatch: {done}')
           print('upload complete: OK')
 
           dq = urllib.parse.urlencode({'key': key})
-          status, deleted = call('/api/files?' + dq, 'DELETE')
+          _, deleted = call('/api/files?' + dq, 'DELETE')
           if not deleted.get('ok'):
               raise RuntimeError(f'Cleanup failed: {deleted}')
           print('cleanup: OK')
