@@ -345,7 +345,7 @@ async function completeUpload(env, body) {
   if (!state) throw new Error('invalid upload state');
   const meta = await driveJson(env, `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(state.fileId)}?fields=id,name,size,mimeType,createdTime,modifiedTime,appProperties`);
   const actual = Number(meta.size || 0);
-  if (Number.isFinite(Number(state.size)) && Number(state.size) !== actual) {
+  if (state.size !== null && state.size !== undefined && Number.isFinite(Number(state.size)) && Number(state.size) !== actual) {
     throw new Error(`upload incomplete: ${actual}/${state.size} bytes`);
   }
   return { ok: true, key: body.key, fileId: meta.id, size: actual, etag: meta.md5Checksum || meta.id };
