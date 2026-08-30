@@ -1,0 +1,36 @@
+name: Core2 one-line fix
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/core2-one-line-fix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Patch nullable streaming size check
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('src/storage.js')
+          s = p.read_text()
+          old = "if (Number.isFinite(Number(state.size)) && Number(state.size) !== actual) {"
+          new = "if (state.size !== null && state.size !== undefined && Number.isFinite(Number(state.size)) && Number(state.size) !== actual) {"
+          if old not in s:
+              raise SystemExit('target line not found')
+          if s.count(old) != 1:
+              raise SystemExit(f'expected one target, got {s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/storage.js
+          git commit -m "Fix unknown-size streaming completion"
+          git push
