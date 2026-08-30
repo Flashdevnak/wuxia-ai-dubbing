@@ -317,7 +317,7 @@ async function handleUploadRoute(request, env, url) {
     const key = fileKey(body.name || "video.bin");
     return json(await startResumable(env, key, body.type || "application/octet-stream", body.size));
   }
-  if (p === "/api/uploads/part" && request.method === "PUT") return uploadPart(request, env, url);
+  if (p === "/api/uploads/part" && (request.method === "POST" || request.method === "PUT")) return uploadPart(request, env, url);
   if (p === "/api/uploads/complete" && request.method === "POST") return json(await completeUpload(env, await request.json()));
   if (p === "/api/uploads/abort" && request.method === "POST") return json(await abortUpload(env, await request.json()));
   return json({ error: "upload route not found" }, 404);
