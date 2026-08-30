@@ -19,6 +19,7 @@ jobs:
       matrix: ${{ steps.prepare.outputs.matrix }}
       total: ${{ steps.prepare.outputs.total }}
       duration: ${{ steps.prepare.outputs.duration }}
+      paused: ${{ steps.control.outputs.paused }}
     env:
       WORKER_URL: ${{ github.event.client_payload.workerBase || secrets.WORKER_URL }}
       WORKER_SHARED_TOKEN: ${{ secrets.WORKER_SHARED_TOKEN }}
@@ -27,11 +28,27 @@ jobs:
       CHUNK_SECONDS: ${{ github.event.client_payload.job.processingMode == 'quality' && '600' || github.event.client_payload.job.processingMode == 'balanced' && '420' || '300' }}
     steps:
       - uses: actions/checkout@v6
+      - id: control
+        name: Register running job and read pause state
+        run: |
+          JOB_ID="$(python3 -c 'import json,os; print(json.loads(os.environ["JOB_JSON"])["id"])')"
+          RESPONSE="$(curl --fail --silent --show-error \
+            -X PATCH "$WORKER_URL/api/internal/jobs/$JOB_ID" \
+            -H "x-worker-token: $WORKER_SHARED_TOKEN" \
+            -H "content-type: application/json" \
+            --data "{\"runId\":$GITHUB_RUN_ID,\"runAttempt\":$GITHUB_RUN_ATTEMPT}")"
+          PAUSED="$(printf '%s' "$RESPONSE" | python3 -c 'import json,sys; j=json.load(sys.stdin).get("job",{}); print("true" if j.get("pauseRequested") or j.get("status")=="paused" else "false")')"
+          echo "paused=$PAUSED" >> "$GITHUB_OUTPUT"
+          if [ "$PAUSED" = "true" ]; then
+            echo "Job is paused before preparation"
+          fi
       - uses: actions/setup-python@v6
+        if: ${{ steps.control.outputs.paused != 'true' }}
         with:
           python-version: '3.12'
           cache: pip
       - name: Ensure ffmpeg
+        if: ${{ steps.control.outputs.paused != 'true' }}
         run: |
           if command -v ffmpeg >/dev/null 2>&1; then
             ffmpeg -version | head -n 1
@@ -40,15 +57,18 @@ jobs:
             sudo apt-get install -y ffmpeg
           fi
       - name: Install preparation dependencies
+        if: ${{ steps.control.outputs.paused != 'true' }}
         run: pip install requests yt-dlp
       - name: Write job payload
+        if: ${{ steps.control.outputs.paused != 'true' }}
         run: |
           python - <<'PY'
           import os, pathlib
           pathlib.Path('job.json').write_text(os.environ['JOB_JSON'], encoding='utf-8')
           PY
       - id: prepare
-        name: Stream source and split into parallel chunks
+        name: Prepare video chunks
+        if: ${{ steps.control.outputs.paused != 'true' }}
         run: |
           python scripts/prepare_job.py \
             --job job.json \
@@ -59,7 +79,7 @@ jobs:
 
   dub:
     needs: prepare
-    if: ${{ needs.prepare.result == 'success' }}
+    if: ${{ needs.prepare.result == 'success' && needs.prepare.outputs.paused != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
     strategy:
@@ -112,7 +132,7 @@ jobs:
 
   finalize:
     needs: [prepare, dub]
-    if: ${{ needs.prepare.result == 'success' && needs.dub.result == 'success' }}
+    if: ${{ needs.prepare.result == 'success' && needs.prepare.outputs.paused != 'true' && needs.dub.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
@@ -141,7 +161,7 @@ jobs:
           import os, pathlib
           pathlib.Path('job.json').write_text(os.environ['JOB_JSON'], encoding='utf-8')
           PY
-      - name: Stream-concatenate and upload final MP4 to Google Drive
+      - name: Combine and upload final MP4
         run: |
           python scripts/finalize_job.py \
             --job job.json \
@@ -172,6 +192,9 @@ jobs:
           job = json.loads(os.environ['JOB_JSON'])
           client = WorkerClient(os.environ['WORKER_URL'], os.environ['WORKER_SHARED_TOKEN'])
           current = client.get_job(job['id'])
+          if current.get('pauseRequested') or current.get('status') == 'paused':
+              print('Job is paused; failure state will not overwrite it')
+              raise SystemExit(0)
           if not current.get('error'):
               client.fail(job['id'], 'ขั้นประมวลผลเสียงพากย์ไม่สำเร็จ กรุณาลองใหม่อีกครั้ง')
           PY
