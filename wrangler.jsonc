@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "wuxia-ai-dubbing",
-  "main": "src/worker-v2.js",
+  "main": "src/worker-v3.js",
   "compatibility_date": "2026-08-01",
   "assets": {
     "directory": "./public",
