@@ -43,7 +43,7 @@ class WorkerClient:
         destination = Path(destination)
         destination.parent.mkdir(parents=True, exist_ok=True)
         url = self.base_url + "/api/internal/file?key=" + quote(key, safe="")
-        with requests.get(url, headers=self.headers, stream=True, timeout=(30, 600)) as r:
+        with requests.get(url, headers=self.headers, stream=True, timeout=(30, 900)) as r:
             if not r.ok:
                 raise RuntimeError(f"Download {key} failed: {r.status_code} {r.text[:1000]}")
             with destination.open("wb") as f:
@@ -54,31 +54,43 @@ class WorkerClient:
 
     def iter_object(self, key: str, chunk_size: int = 8 * 1024 * 1024):
         url = self.base_url + "/api/internal/file?key=" + quote(key, safe="")
-        with requests.get(url, headers=self.headers, stream=True, timeout=(30, 600)) as r:
+        with requests.get(url, headers=self.headers, stream=True, timeout=(30, 900)) as r:
             if not r.ok:
                 raise RuntimeError(f"Download {key} failed: {r.status_code} {r.text[:1000]}")
             for chunk in r.iter_content(chunk_size=chunk_size):
                 if chunk:
                     yield chunk
 
-    def _start_upload(self, key: str, content_type: str) -> tuple[str, int]:
-        init = self._json("POST", "/api/internal/uploads/start", json={"key": key, "type": content_type})
+    def _start_upload(self, key: str, content_type: str, size: int | None = None) -> tuple[str, int]:
+        payload: dict[str, Any] = {"key": key, "type": content_type}
+        if size is not None:
+            payload["size"] = int(size)
+        init = self._json("POST", "/api/internal/uploads/start", json=payload)
         upload_id = init["uploadId"]
         part_size = min(int(init.get("partSize") or 32 * 1024 * 1024), 32 * 1024 * 1024)
         return upload_id, part_size
 
-    def _upload_part(self, key: str, upload_id: str, part_number: int, data: bytes) -> dict[str, Any]:
+    def _upload_part(
+        self,
+        key: str,
+        upload_id: str,
+        part_number: int,
+        data: bytes,
+        final_total: int | None = None,
+    ) -> dict[str, Any]:
         url = (
             f"/api/internal/uploads/part?key={quote(key, safe='')}"
             f"&uploadId={quote(upload_id, safe='')}&partNumber={part_number}"
         )
+        if final_total is not None:
+            url += f"&finalTotal={int(final_total)}"
         part = self._json(
             "PUT",
             url,
             data=data,
             headers={"content-type": "application/octet-stream", "content-length": str(len(data))},
         )
-        return {"partNumber": int(part["partNumber"]), "etag": part["etag"]}
+        return {"partNumber": int(part["partNumber"]), "etag": part.get("etag") or f"drive-{part_number}"}
 
     def _complete_upload(self, key: str, upload_id: str, parts: list[dict[str, Any]]) -> dict[str, Any]:
         return self._json(
@@ -90,7 +102,8 @@ class WorkerClient:
     def upload(self, source: str | Path, key: str, content_type: str | None = None) -> dict[str, Any]:
         source = Path(source)
         content_type = content_type or mimetypes.guess_type(source.name)[0] or "application/octet-stream"
-        upload_id, part_size = self._start_upload(key, content_type)
+        size = source.stat().st_size
+        upload_id, part_size = self._start_upload(key, content_type, size=size)
         parts: list[dict[str, Any]] = []
         with source.open("rb") as f:
             part_number = 1
@@ -100,20 +113,27 @@ class WorkerClient:
                     break
                 parts.append(self._upload_part(key, upload_id, part_number, data))
                 part_number += 1
-        return self._complete_upload(key, upload_id, parts)
+        result = self._complete_upload(key, upload_id, parts)
+        result.setdefault("size", size)
+        return result
 
     def upload_stream(self, stream: BinaryIO, key: str, content_type: str = "application/octet-stream") -> dict[str, Any]:
-        upload_id, part_size = self._start_upload(key, content_type)
+        # Google Drive resumable uploads can start without a known total. Keep one
+        # chunk in memory so the final request can carry the real total length.
+        upload_id, part_size = self._start_upload(key, content_type, size=None)
         parts: list[dict[str, Any]] = []
         total = 0
         part_number = 1
-        while True:
-            data = stream.read(part_size)
-            if not data:
-                break
-            total += len(data)
-            parts.append(self._upload_part(key, upload_id, part_number, data))
+        current = stream.read(part_size)
+        while current:
+            following = stream.read(part_size)
+            total += len(current)
+            final_total = total if not following else None
+            parts.append(self._upload_part(key, upload_id, part_number, current, final_total=final_total))
             part_number += 1
+            current = following
+        if total == 0:
+            raise RuntimeError("Cannot upload an empty stream")
         result = self._complete_upload(key, upload_id, parts)
         result.setdefault("size", total)
         return result
