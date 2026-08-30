@@ -1,0 +1,69 @@
+/* Mobile performance layer — keep the fire theme, remove GPU-heavy effects. */
+
+/* Off-screen sections should not cost paint/layout until needed. */
+.page:not(.active){content-visibility:hidden}
+.job-card,.file-card,.panel{contain:layout paint style}
+
+@media (max-width: 768px){
+  /* Keep the fire palette but make the background mostly static. */
+  .fire-horizon{
+    filter:blur(2px)!important;
+    opacity:.58!important;
+    animation:none!important;
+    transform:none!important;
+  }
+  .fire-horizon:before,
+  .fire-horizon:after{
+    animation:none!important;
+    opacity:.22!important;
+    mix-blend-mode:normal!important;
+  }
+  .fire-glow{
+    filter:blur(24px)!important;
+    opacity:.18!important;
+    animation:none!important;
+    mix-blend-mode:normal!important;
+  }
+  .smoke{display:none!important}
+
+  /* Only 12 embers animate on mobile instead of all 54. */
+  #sparkField .spark:nth-child(n+13){display:none!important}
+  .spark{
+    box-shadow:0 0 6px rgba(255,123,33,.72)!important;
+    opacity:.62!important;
+    animation-duration:9s!important;
+  }
+
+  /* Large translucent blurs are expensive on Android GPUs. */
+  .sidebar,
+  .topbar,
+  .panel,
+  .loading-overlay{
+    -webkit-backdrop-filter:none!important;
+    backdrop-filter:none!important;
+  }
+
+  /* Keep the visual identity without continuously rotating a huge layer. */
+  .hero:before{animation:none!important;opacity:.48!important}
+  .shine{animation:none!important;opacity:.18!important}
+
+  /* Reduce giant glow paints; the sword progress remains animated. */
+  .source-card,
+  .panel,
+  .job-card{
+    box-shadow:0 10px 28px rgba(0,0,0,.38),0 0 14px rgba(178,36,12,.045)!important;
+  }
+  .hero-blade i{box-shadow:0 0 10px rgba(255,82,27,.62)!important}
+
+  /* Avoid repainting unrelated content while progress width changes. */
+  .sword-progress,
+  .upload-progress,
+  .job-card{isolation:isolate}
+}
+
+/* Pause decorative motion when the app is not the foreground tab. */
+html.page-hidden .scene *,
+html.page-hidden .hero:before,
+html.page-hidden .shine{
+  animation-play-state:paused!important;
+}
