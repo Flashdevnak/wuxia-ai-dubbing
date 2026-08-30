@@ -1,0 +1,2 @@
+Core 2.0 clean rebuild verification
+2026-08-30
