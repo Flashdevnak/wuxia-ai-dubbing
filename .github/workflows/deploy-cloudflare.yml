@@ -135,9 +135,9 @@ jobs:
 
           health = request('/api/health')[2]
           assert health.get('driveReady'), health
-          assert health.get('core') == 'clean-v2.2', health
+          assert health.get('core') == 'clean-v2.3', health
           assert health.get('uploadMode') == 'same-origin-multipart', health
-          print('health clean-v2.2: OK')
+          print('health clean-v2.3: OK')
 
           translated = internal_json('/api/internal/translate', 'POST', {'texts': ['Hello, welcome.'], 'sourceLang': 'en', 'targetLang': 'th'})
           assert len(translated.get('translations') or []) == 1, translated
