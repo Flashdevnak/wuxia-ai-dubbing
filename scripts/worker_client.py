@@ -39,6 +39,16 @@ class WorkerClient:
     def patch_job(self, job_id: str, **patch: Any) -> dict[str, Any]:
         return self._json("PATCH", f"/api/internal/jobs/{quote(job_id)}", json=patch)["job"]
 
+    def object_info(self, key: str) -> dict[str, Any]:
+        return self._json("GET", "/api/internal/exists?key=" + quote(key, safe=""))
+
+    def exists(self, key: str) -> bool:
+        return bool(self.object_info(key).get("exists"))
+
+    def is_paused(self, job_id: str) -> bool:
+        job = self.get_job(job_id)
+        return bool(job.get("pauseRequested") is True or job.get("status") == "paused")
+
     def download(self, key: str, destination: str | Path) -> Path:
         destination = Path(destination)
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -130,10 +140,7 @@ class WorkerClient:
 
     def upload_stream(self, stream: BinaryIO, key: str, content_type: str = "application/octet-stream") -> dict[str, Any]:
         # Google Drive resumable uploads can start without a known total. Pipe
-        # reads (for example FFmpeg stdout) may return only a few bytes even when
-        # a much larger read was requested, so first coalesce short reads into a
-        # full Drive chunk. Keep one full chunk of look-ahead so only the real
-        # final request is allowed to be smaller than Drive's 256 KiB minimum.
+        # reads may return short pieces, so fill each Drive chunk before sending.
         upload_id, part_size = self._start_upload(key, content_type, size=None)
         drive_granularity = 256 * 1024
         if part_size < drive_granularity or part_size % drive_granularity != 0:
