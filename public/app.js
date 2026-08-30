@@ -337,7 +337,7 @@ function jobHtml(j) {
         : '';
   return `<article class="job-card ${statusClass}">
     <div class="job-top"><div class="job-copy"><div class="job-title">${esc(j.title)}</div><div class="job-meta">ต้นฉบับ ${esc(langLabel(j.sourceLang))} พากย์เป็น ${esc(langLabel(j.targetLang))} โหมด${mode}</div><div class="job-stage"><span></span>${esc(statusText)}</div>${err ? `<div class="job-error">${esc(err)}</div>` : ''}</div>
-    <div class="job-actions">${control}${j.outputKey ? `<button class="mini-btn" data-file="${esc(j.outputKey)}">ดาวน์โหลด MP4</button>` : ''}${j.subtitleKey ? `<button class="mini-btn" data-file="${esc(j.subtitleKey)}">คำบรรยาย</button>` : ''}<button class="mini-btn danger" data-delete-job="${esc(j.id)}">ลบ</button></div></div>
+    <div class="job-actions">${control}${j.outputKey ? `<button class="mini-btn" data-file="${esc(j.outputKey)}">ดาวน์โหลด MP4</button>` : ''}${j.subtitleKey ? `<button class="mini-btn" data-file="${esc(j.subtitleKey)}">คำบรรยาย</button>` : ''}${j.transcriptXmlKey ? `<button class="mini-btn" data-file="${esc(j.transcriptXmlKey)}">XML ซับ</button>` : ''}<button class="mini-btn danger" data-delete-job="${esc(j.id)}">ลบ</button></div></div>
     <div class="sword-progress job-sword"><i><em style="width:${p}%"></em></i><span class="sword-hilt">◆</span></div>
     <div class="job-foot"><b>${p}%</b><span>อัปเดต ${new Date(j.updatedAt || j.createdAt).toLocaleString('th-TH')}</span></div>
   </article>`;

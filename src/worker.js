@@ -174,16 +174,16 @@ function modelName(env) {
   return env.TRANSLATE_MODEL || '@cf/meta/llama-3.1-8b-instruct-fast';
 }
 
-async function runTranslationBatch(env, texts, sourceLang, targetLang) {
+async function runTranslationBatch(env, texts, sourceLang, targetLang, durations = []) {
   const payload = {
     messages: [
       {
         role: 'system',
-        content: 'Translate subtitle items faithfully and naturally. Preserve names, emotion and order. Output exactly one JSON object shaped like {"translations":["..."]}. No explanation or markdown.',
+        content: 'Translate these adjacent subtitle lines as one continuous scene. Use neighboring lines to resolve pronouns, names and meaning. Preserve names, emotion and item order. Make each translated line concise enough to speak naturally within its durationsSeconds value; never omit important meaning just to shorten it. Output exactly one JSON object shaped like {"translations":["..."]}. No explanation or markdown.',
       },
       {
         role: 'user',
-        content: JSON.stringify({ sourceLanguage: sourceLang || 'auto', targetLanguage: targetLang, texts }),
+        content: JSON.stringify({ sourceLanguage: sourceLang || 'auto', targetLanguage: targetLang, texts, durationsSeconds: durations }),
       },
     ],
     temperature: 0,
@@ -208,12 +208,12 @@ async function runSingleTranslation(env, text, sourceLang, targetLang) {
   return extractAIText(out);
 }
 
-async function translateWithAI(env, texts, sourceLang, targetLang) {
+async function translateWithAI(env, texts, sourceLang, targetLang, durations = []) {
   if (!env.AI) throw new Error('Workers AI binding unavailable');
   if (sourceLang === targetLang) return texts;
 
   try {
-    const batchOut = await runTranslationBatch(env, texts, sourceLang, targetLang);
+    const batchOut = await runTranslationBatch(env, texts, sourceLang, targetLang, durations);
     const translations = parseTranslationValue(batchOut, texts.length);
     if (translations && translations.every(x => String(x).trim())) return translations.map(x => String(x).trim());
   } catch (err) {
@@ -290,7 +290,7 @@ async function handleInternal(request, env, url) {
       if (!current) return json({ error: 'not found' }, 404);
       const patch = await request.json();
       const paused = current.pauseRequested === true || current.status === 'paused';
-      const allowed = ['status', 'stage', 'outputKey', 'subtitleKey', 'log', 'duration', 'sizeBytes', 'chunkTotal', 'error', 'runId', 'runAttempt'];
+      const allowed = ['status', 'stage', 'outputKey', 'subtitleKey', 'transcriptXmlKey', 'transcriptLanguage', 'transcriptSource', 'log', 'duration', 'sizeBytes', 'chunkTotal', 'error', 'runId', 'runAttempt'];
       for (const k of allowed) {
         if (!(k in patch)) continue;
         if (paused && (k === 'status' || k === 'stage') && patch[k] !== 'paused') continue;
@@ -366,7 +366,14 @@ async function handleInternal(request, env, url) {
     const body = await request.json();
     const texts = Array.isArray(body.texts) ? body.texts.map(x => String(x)) : [];
     if (!texts.length || texts.length > 20) return json({ error: 'invalid translation batch' }, 400);
-    const translations = await translateWithAI(env, texts, String(body.sourceLang || 'auto'), String(body.targetLang || 'th'));
+    const durations = Array.isArray(body.durations) ? body.durations.map(x => Math.max(0.1, Number(x) || 0.1)) : [];
+    const translations = await translateWithAI(
+      env,
+      texts,
+      String(body.sourceLang || 'auto'),
+      String(body.targetLang || 'th'),
+      durations.length === texts.length ? durations : [],
+    );
     return json({ translations });
   }
 

@@ -196,12 +196,21 @@ class WorkerClient:
     def fail(self, job_id: str, error: str) -> dict[str, Any]:
         return self._json("POST", "/api/internal/fail", json={"jobId": job_id, "error": error[:4000]})
 
-    def translate(self, texts: list[str], source_lang: str, target_lang: str) -> list[str]:
-        data = self._json(
-            "POST",
-            "/api/internal/translate",
-            json={"texts": texts, "sourceLang": source_lang, "targetLang": target_lang},
-        )
+    def translate(
+        self,
+        texts: list[str],
+        source_lang: str,
+        target_lang: str,
+        durations: list[float] | None = None,
+    ) -> list[str]:
+        payload: dict[str, Any] = {
+            "texts": texts,
+            "sourceLang": source_lang,
+            "targetLang": target_lang,
+        }
+        if durations is not None:
+            payload["durations"] = [round(max(0.1, float(x)), 3) for x in durations]
+        data = self._json("POST", "/api/internal/translate", json=payload)
         return [str(x) for x in data.get("translations", [])]
 
 

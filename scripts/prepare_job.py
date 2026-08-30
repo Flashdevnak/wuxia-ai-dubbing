@@ -11,6 +11,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from worker_client import WorkerClient
+from youtube_transcript import extract_youtube_transcript, slice_entries, transcript_xml
 
 
 class CommandError(RuntimeError):
@@ -215,6 +216,7 @@ def main() -> None:
         print(f"Prepared manifest cannot be reused: {exc}", flush=True)
 
     headers = None
+    youtube_transcript = None
     if job.get("sourceType") == "upload":
         key = job.get("sourceKey")
         if not key:
@@ -227,6 +229,41 @@ def main() -> None:
             raise RuntimeError("Link job has no sourceUrl")
         try:
             cookies_file = build_cookie_file()
+            try:
+                youtube_transcript = extract_youtube_transcript(
+                    source_url,
+                    target_lang=str(job.get("targetLang") or "th"),
+                    source_lang=str(job.get("sourceLang") or "auto"),
+                    cookies_file=cookies_file,
+                )
+                full_json = work / "youtube_transcript.json"
+                full_json.write_text(json.dumps(youtube_transcript, ensure_ascii=False, indent=2), encoding="utf-8")
+                client.upload(full_json, f"temp/{job_id}/transcript/full.json", "application/json")
+
+                xml_path = work / "youtube_transcript.xml"
+                xml_path.write_text(transcript_xml(youtube_transcript["entries"]), encoding="utf-8")
+                xml_key = f"outputs/{job_id}/youtube_transcript.xml"
+                client.upload(xml_path, xml_key, "application/xml")
+                client.patch_job(
+                    job_id,
+                    stage=(
+                        f"พบซับ YouTube ภาษา {youtube_transcript['language']} ใช้เวลาเดิมของวิดีโอ"
+                        if youtube_transcript.get("targetReady")
+                        else f"พบซับ YouTube ภาษา {youtube_transcript['language']} จะใช้เวลาเดิมแล้วแปลไทย"
+                    ),
+                    transcriptXmlKey=xml_key,
+                    transcriptLanguage=str(youtube_transcript.get("language") or ""),
+                    transcriptSource="youtube",
+                )
+                print(
+                    f"YouTube transcript ready: {len(youtube_transcript['entries'])} lines, "
+                    f"lang={youtube_transcript['language']}, targetReady={youtube_transcript.get('targetReady')}",
+                    flush=True,
+                )
+            except Exception as transcript_error:
+                youtube_transcript = None
+                print(f"YouTube transcript unavailable; Whisper fallback will be used: {transcript_error}", flush=True)
+
             input_url = yt_direct_url(source_url, cookies_file)
         except Exception as exc:
             message = str(exc)
@@ -273,7 +310,35 @@ def main() -> None:
             key = f"temp/{job_id}/source/chunk_{next_index:05d}.mkv"
             print(f"Uploading source chunk {next_index}: {size} bytes")
             client.upload(current, key, "video/x-matroska")
-            uploaded.append({"index": next_index, "key": key, "size": size})
+            chunk_duration = probe_duration(str(current))
+            if chunk_duration <= 0:
+                chunk_duration = float(max(300, args.chunk_seconds))
+            chunk_start = sum(float(c.get("duration") or 0) for c in uploaded)
+            item = {
+                "index": next_index,
+                "key": key,
+                "size": size,
+                "start": chunk_start,
+                "duration": chunk_duration,
+            }
+            if youtube_transcript:
+                local_entries = slice_entries(youtube_transcript.get("entries") or [], chunk_start, chunk_duration)
+                chunk_transcript = {
+                    "language": youtube_transcript.get("language"),
+                    "targetLanguage": youtube_transcript.get("targetLanguage"),
+                    "targetReady": bool(youtube_transcript.get("targetReady")),
+                    "origin": youtube_transcript.get("origin"),
+                    "chunkStart": chunk_start,
+                    "chunkDuration": chunk_duration,
+                    "entries": local_entries,
+                }
+                transcript_path = work / f"transcript_{next_index:05d}.json"
+                transcript_path.write_text(json.dumps(chunk_transcript, ensure_ascii=False), encoding="utf-8")
+                transcript_key = f"temp/{job_id}/transcript/chunk_{next_index:05d}.json"
+                client.upload(transcript_path, transcript_key, "application/json")
+                item["transcriptKey"] = transcript_key
+                item["transcriptLines"] = len(local_entries)
+            uploaded.append(item)
             current.unlink(missing_ok=True)
             next_index += 1
             approx = 5 + min(5, len(uploaded) // 2)
