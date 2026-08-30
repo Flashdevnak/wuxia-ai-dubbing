@@ -1,11 +1,14 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "wuxia-ai-dubbing",
-  "main": "src/worker.js",
+  "main": "src/worker-v2.js",
   "compatibility_date": "2026-08-01",
   "assets": {
     "directory": "./public",
     "binding": "ASSETS"
+  },
+  "ai": {
+    "binding": "AI"
   },
   "r2_buckets": [
     {
@@ -16,6 +19,7 @@
   "vars": {
     "APP_NAME": "ยุทธภพ AI Dubbing",
     "FREE_STORAGE_GB": "10",
-    "GITHUB_REPO": "Flashdevnak/wuxia-ai-dubbing"
+    "GITHUB_REPO": "Flashdevnak/wuxia-ai-dubbing",
+    "TRANSLATE_MODEL": "@cf/meta/llama-3.1-8b-instruct-fast"
   }
 }
