@@ -19,7 +19,8 @@ jobs:
       - name: JavaScript syntax check
         run: |
           node --check public/app.js
-          node --check src/worker-v2.js
+          node --check src/worker.js
+          node --check src/storage.js
       - name: Python syntax check
         run: |
           python -m py_compile \
@@ -31,6 +32,9 @@ jobs:
         run: |
           test -f public/index.html
           test -f public/styles.css
+          test -f public/app.js
+          test -f src/worker.js
+          test -f src/storage.js
           test -f wrangler.jsonc
           test -f requirements.txt
           test -f .github/workflows/dubbing.yml
