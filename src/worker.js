@@ -82,33 +82,167 @@ function cleanProgress(value) {
   return Number.isFinite(n) ? Math.max(0, Math.min(100, Math.round(n))) : 0;
 }
 
-function parseTranslationValue(value, expectedCount) {
+function stripModelText(value) {
+  let text = String(value ?? '').trim();
+  text = text.replace(/^```(?:json|text)?\s*/i, '').replace(/\s*```$/i, '').trim();
+  text = text.replace(/^(?:translation|translated text|คำแปล)\s*:\s*/i, '').trim();
+  if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
+    text = text.slice(1, -1).trim();
+  }
+  return text;
+}
+
+function extractAIText(value, depth = 0) {
+  if (depth > 8 || value == null) return '';
+  if (typeof value === 'string') return stripModelText(value);
   if (Array.isArray(value)) {
-    if (value.length === expectedCount) return value.map(x => String(x));
+    for (const item of value) {
+      const found = extractAIText(item, depth + 1);
+      if (found) return found;
+    }
+    return '';
+  }
+  if (typeof value === 'object') {
+    const preferred = ['response', 'text', 'content', 'generated_text', 'output_text', 'result', 'output', 'message', 'choices'];
+    for (const key of preferred) {
+      if (key in value) {
+        const found = extractAIText(value[key], depth + 1);
+        if (found) return found;
+      }
+    }
+    for (const nested of Object.values(value)) {
+      const found = extractAIText(nested, depth + 1);
+      if (found) return found;
+    }
+  }
+  return '';
+}
+
+function parseTranslationValue(value, expectedCount, depth = 0) {
+  if (depth > 8 || value == null) return null;
+  if (Array.isArray(value)) {
+    if (value.length === expectedCount && value.every(x => ['string', 'number', 'boolean'].includes(typeof x))) {
+      return value.map(x => String(x));
+    }
+    for (const item of value) {
+      const nested = parseTranslationValue(item, expectedCount, depth + 1);
+      if (nested) return nested;
+    }
     return null;
   }
-  if (value && typeof value === 'object') {
-    for (const key of ['translations', 'response', 'result', 'output']) {
+  if (typeof value === 'object') {
+    const preferred = ['translations', 'response', 'result', 'output', 'text', 'content', 'generated_text', 'message', 'choices'];
+    for (const key of preferred) {
       if (key in value) {
-        const nested = parseTranslationValue(value[key], expectedCount);
+        const nested = parseTranslationValue(value[key], expectedCount, depth + 1);
         if (nested) return nested;
       }
+    }
+    for (const nestedValue of Object.values(value)) {
+      const nested = parseTranslationValue(nestedValue, expectedCount, depth + 1);
+      if (nested) return nested;
     }
     return null;
   }
   if (typeof value !== 'string') return null;
-  const text = value.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+
+  const text = stripModelText(value);
+  if (!text) return null;
   const candidates = [text];
-  const match = text.match(/\[[\s\S]*\]/);
-  if (match && match[0] !== text) candidates.push(match[0]);
+  const arrayMatch = text.match(/\[[\s\S]*\]/);
+  if (arrayMatch && arrayMatch[0] !== text) candidates.push(arrayMatch[0]);
+  const objectMatch = text.match(/\{[\s\S]*\}/);
+  if (objectMatch && objectMatch[0] !== text) candidates.push(objectMatch[0]);
   for (const candidate of candidates) {
     try {
       const parsed = JSON.parse(candidate);
-      const normalized = parseTranslationValue(parsed, expectedCount);
+      const normalized = parseTranslationValue(parsed, expectedCount, depth + 1);
       if (normalized) return normalized;
     } catch {}
   }
+
+  if (expectedCount === 1) return [text];
+
+  const lines = text.split(/\r?\n/)
+    .map(line => line.replace(/^\s*(?:[-*•]|\d+[.)\]:-]?)\s*/, '').trim())
+    .filter(Boolean);
+  if (lines.length === expectedCount) return lines;
   return null;
+}
+
+function modelName(env) {
+  return env.TRANSLATE_MODEL || '@cf/meta/llama-3.1-8b-instruct-fast';
+}
+
+async function runTranslationBatch(env, texts, sourceLang, targetLang) {
+  const payload = {
+    messages: [
+      {
+        role: 'system',
+        content: 'Translate subtitle items faithfully and naturally. Preserve names, emotion and order. Output exactly one JSON object shaped like {"translations":["..."]}. No explanation or markdown.',
+      },
+      {
+        role: 'user',
+        content: JSON.stringify({ sourceLanguage: sourceLang || 'auto', targetLanguage: targetLang, texts }),
+      },
+    ],
+    temperature: 0,
+    max_tokens: 4096,
+  };
+  return env.AI.run(modelName(env), payload);
+}
+
+async function runSingleTranslation(env, text, sourceLang, targetLang) {
+  const payload = {
+    messages: [
+      {
+        role: 'system',
+        content: `Translate one subtitle from ${sourceLang || 'auto'} to ${targetLang}. Return only the translated subtitle text. No label, quote, markdown or explanation.`,
+      },
+      { role: 'user', content: text },
+    ],
+    temperature: 0,
+    max_tokens: 512,
+  };
+  const out = await env.AI.run(modelName(env), payload);
+  return extractAIText(out);
+}
+
+async function translateWithAI(env, texts, sourceLang, targetLang) {
+  if (!env.AI) throw new Error('Workers AI binding unavailable');
+  if (sourceLang === targetLang) return texts;
+
+  try {
+    const batchOut = await runTranslationBatch(env, texts, sourceLang, targetLang);
+    const translations = parseTranslationValue(batchOut, texts.length);
+    if (translations && translations.every(x => String(x).trim())) return translations.map(x => String(x).trim());
+  } catch (err) {
+    console.warn('Workers AI batch translation failed; retrying per subtitle', err?.message || String(err));
+  }
+
+  const results = new Array(texts.length);
+  let successful = 0;
+  for (let start = 0; start < texts.length; start += 4) {
+    const indexes = Array.from({ length: Math.min(4, texts.length - start) }, (_, i) => start + i);
+    const values = await Promise.all(indexes.map(async idx => {
+      const original = String(texts[idx] || '');
+      if (!original.trim()) return '';
+      try {
+        const translated = await runSingleTranslation(env, original, sourceLang, targetLang);
+        if (translated) {
+          successful += 1;
+          return translated;
+        }
+      } catch (err) {
+        console.warn(`Workers AI single translation ${idx} failed`, err?.message || String(err));
+      }
+      return null;
+    }));
+    indexes.forEach((idx, i) => { results[idx] = values[i] ?? String(texts[idx] || ''); });
+  }
+
+  if (!successful && texts.some(x => String(x).trim())) throw new Error('Workers AI translation unavailable');
+  return results;
 }
 
 async function triggerGitHub(env, job, workerBase) {
@@ -125,28 +259,6 @@ async function triggerGitHub(env, job, workerBase) {
     body: JSON.stringify({ event_type: 'dubbing_job', client_payload: { job, workerBase } }),
   });
   return { triggered: res.ok, status: res.status, detail: res.ok ? undefined : await res.text() };
-}
-
-async function translateWithAI(env, texts, sourceLang, targetLang) {
-  if (!env.AI) throw new Error('Workers AI binding unavailable');
-  const payload = {
-    messages: [
-      {
-        role: 'system',
-        content: 'You are a professional subtitle translator. Translate each item faithfully and naturally. Preserve names, tone and sequence. Return ONLY a JSON array of translated strings with exactly the same number of items. No markdown.',
-      },
-      {
-        role: 'user',
-        content: JSON.stringify({ sourceLanguage: sourceLang || 'auto', targetLanguage: targetLang, texts }),
-      },
-    ],
-    temperature: 0.1,
-    max_tokens: 4096,
-  };
-  const out = await env.AI.run(env.TRANSLATE_MODEL || '@cf/meta/llama-3.1-8b-instruct-fast', payload);
-  const translations = parseTranslationValue(out, texts.length);
-  if (!translations) throw new Error('Workers AI translation returned unusable JSON');
-  return translations;
 }
 
 async function handleInternal(request, env, url) {
