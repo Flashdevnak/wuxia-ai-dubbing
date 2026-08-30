@@ -1,0 +1,56 @@
+name: Deploy storage cleanup controls
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/deploy-storage-controls.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WORKER_URL: https://wuxia-ai-dubbing.26nak-testdev.workers.dev
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Validate current main
+        run: |
+          node --check public/app.js
+          node --check src/worker.js
+          grep -q "cleanupUploadsBtn" public/index.html
+          grep -q "cleanupOutputsBtn" public/index.html
+          grep -q "cleanupAllBtn" public/index.html
+      - name: Install Wrangler
+        run: npm install
+      - name: Deploy current main to Cloudflare
+        run: npx wrangler deploy
+      - name: Verify live storage controls
+        run: |
+          python - <<'PY'
+          import os, urllib.request
+          base = os.environ['WORKER_URL'].rstrip('/')
+          req = urllib.request.Request(base + '/', headers={'User-Agent':'Mozilla/5.0'})
+          html = urllib.request.urlopen(req, timeout=60).read().decode('utf-8', 'replace')
+          for needle in ['cleanupUploadsBtn','cleanupOutputsBtn','cleanupAllBtn']:
+              assert needle in html, needle
+          health = urllib.request.urlopen(urllib.request.Request(base + '/api/health', headers={'User-Agent':'Mozilla/5.0'}), timeout=60).read().decode()
+          assert '"ok":true' in health
+          print('live storage controls: OK')
+          PY
+      - name: Remove temporary deploy workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm .github/workflows/deploy-storage-controls.yml
+          git add .github/workflows/deploy-storage-controls.yml
+          git commit -m "Remove temporary storage deploy runner"
+          git push
