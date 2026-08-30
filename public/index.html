@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#05090d" />
+  <title>ยุทธภพ AI Dubbing</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="scene" aria-hidden="true">
+    <div class="moon"></div>
+    <div class="mountain m1"></div><div class="mountain m2"></div><div class="mountain m3"></div>
+    <div class="mist mist-a"></div><div class="mist mist-b"></div>
+    <div id="sparkField" class="spark-field"></div>
+  </div>
+
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand"><div class="brand-mark">侠</div><div><strong>ยุทธภพ</strong><span>AI Dubbing</span></div></div>
+      <nav class="nav" id="nav">
+        <button class="nav-item active" data-page="home"><span>⌂</span>หน้าหลัก</button>
+        <button class="nav-item" data-page="jobs"><span>▤</span>งานของฉัน</button>
+        <button class="nav-item" data-page="files"><span>▣</span>ไฟล์ต้นฉบับ</button>
+        <button class="nav-item" data-page="results"><span>✧</span>ผลลัพธ์</button>
+        <button class="nav-item" data-page="voices"><span>◉</span>เทมเพลตเสียง</button>
+        <button class="nav-item" data-page="translate"><span>文</span>ภาษา</button>
+        <button class="nav-item" data-page="storage"><span>◆</span>พื้นที่ใช้งาน</button>
+        <button class="nav-item" data-page="settings"><span>⚙</span>ตั้งค่า</button>
+      </nav>
+      <div class="side-footer"><div class="rank-card"><span>ฟรีแพ็ก</span><b>สายฟรีเต็มพลัง</b><small>Cloudflare + R2 + GitHub Actions</small></div></div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <button id="menuBtn" class="icon-btn mobile-only" aria-label="เมนู">☰</button>
+        <div class="top-spacer"></div>
+        <div class="storage-mini"><span>พื้นที่</span><b id="topStorage">0.00 GB / 10 GB</b><i><em id="topStorageBar"></em></i></div>
+        <span id="deployMode" class="deploy-mode" title="สถานะการเชื่อมระบบ">GitHub Preview</span>
+        <button class="icon-btn" id="refreshBtn" title="รีเฟรช">↻</button>
+        <div class="avatar">侠</div>
+      </header>
+
+      <section class="page active" data-page-panel="home">
+        <div class="hero">
+          <div class="hero-copy">
+            <div class="eyebrow">侠声阁 · AI VOICE REALM</div>
+            <h1>ยุทธภพ <span>AI Dubbing</span></h1>
+            <p>พากย์เสียงอัตโนมัติหลายภาษา รองรับวิดีโอยาวหลายชั่วโมง ระบบแบ่งช่วง Resume และรวมกลับเป็นไฟล์เดียว</p>
+          </div>
+          <div class="hero-sword" aria-hidden="true"><div class="sword-line"></div><div class="sword-glow"></div></div>
+        </div>
+
+        <div class="source-grid">
+          <button class="source-card emerald" id="linkCard">
+            <span class="sigil">⛓</span><div><b>วางลิงก์วิดีโอ</b><small>YouTube หรือแหล่งที่คุณมีสิทธิ์ใช้งาน</small></div><span class="shine"></span>
+          </button>
+          <button class="source-card gold" id="uploadCard">
+            <span class="sigil">⇧</span><div><b>อัปโหลดไฟล์</b><small>MP4 · MOV · MKV · WEBM · ไฟล์ใหญ่แบบ Resume</small></div><span class="shine"></span>
+          </button>
+        </div>
+
+        <div class="panel create-panel">
+          <div id="sourceBox" class="source-box">
+            <div id="linkInputWrap" class="input-row">
+              <input id="videoUrl" type="url" placeholder="วางลิงก์วิดีโอที่นี่..." />
+              <button id="analyzeLinkBtn" class="btn ghost">ตรวจลิงก์</button>
+            </div>
+            <div id="fileInputWrap" class="file-drop hidden">
+              <input id="fileInput" type="file" accept="video/*" />
+              <label for="fileInput"><b>เลือกวิดีโอ</b><span>หรือแตะเพื่อเลือกไฟล์จากอุปกรณ์</span></label>
+              <div id="uploadProgress" class="upload-progress hidden"><div><span id="uploadName">กำลังอัปโหลด</span><b id="uploadPct">0%</b></div><i><em id="uploadBar"></em></i><small id="uploadStatus">เตรียมไฟล์...</small></div>
+            </div>
+          </div>
+
+          <div class="option-grid">
+            <label><span>ภาษาต้นฉบับ</span><select id="sourceLang"></select></label>
+            <div class="arrow-orb">➜</div>
+            <label><span>ภาษาพากย์</span><select id="targetLang"></select></label>
+            <label><span>โหมดเสียง</span><select id="voiceMode"><option value="auto">อัตโนมัติตามตัวละคร</option><option value="male">ผู้ชาย</option><option value="female">ผู้หญิง</option><option value="narrator">ผู้บรรยาย</option></select></label>
+          </div>
+
+          <div class="toggles">
+            <label class="toggle"><input id="subtitles" type="checkbox" checked /><span></span><b>สร้างซับ</b></label>
+            <label class="toggle"><input id="keepMusic" type="checkbox" checked /><span></span><b>คงเพลง/เอฟเฟกต์</b></label>
+            <label class="toggle"><input id="speakerSep" type="checkbox" checked /><span></span><b>แยกผู้พูด</b></label>
+            <label class="toggle"><input id="autoCleanup" type="checkbox" checked /><span></span><b>ลบไฟล์ชั่วคราวอัตโนมัติ</b></label>
+          </div>
+
+          <button id="startBtn" class="btn primary big"><span class="btn-stars"></span><b>☯ เริ่มสร้างเสียงพากย์</b><small>แบ่งช่วงอัตโนมัติ · Resume ได้</small></button>
+          <div id="message" class="message" role="status"></div>
+        </div>
+
+        <div class="dashboard-grid">
+          <div class="panel jobs-panel"><div class="panel-title"><h2>งานประมวลผลปัจจุบัน</h2><button id="seeJobs" class="text-btn">ดูทั้งหมด ›</button></div><div id="homeJobs" class="job-list empty-state">ยังไม่มีงานพากย์</div></div>
+          <div class="panel storage-panel"><div class="panel-title"><h2>พื้นที่ใช้งาน</h2></div><div class="storage-ring"><div><b id="ringGb">0.00</b><span>GB ใช้ไป</span></div></div><p><b id="ringText">0.00 GB</b> จาก 10 GB</p><div class="storage-breakdown" id="storageBreakdown"></div><button class="btn ghost full" data-go="storage">จัดการพื้นที่</button></div>
+        </div>
+      </section>
+
+      <section class="page" data-page-panel="jobs"><div class="page-head"><h1>คัมภีร์งานพากย์</h1><p>งานทั้งหมดที่กำลังเข้าคิว ประมวลผล และเสร็จแล้ว</p></div><div class="panel"><div id="jobsList" class="job-list empty-state">ยังไม่มีงาน</div></div></section>
+      <section class="page" data-page-panel="files"><div class="page-head"><h1>ไฟล์ต้นฉบับ</h1><p>ดูขนาดไฟล์และลบเพื่อคืนพื้นที่</p></div><div class="panel"><div id="filesList" class="file-list empty-state">ยังไม่มีไฟล์</div></div></section>
+      <section class="page" data-page-panel="results"><div class="page-head"><h1>ผลลัพธ์</h1><p>วิดีโอพากย์และไฟล์ซับที่สร้างเสร็จ</p></div><div class="panel"><div id="resultsList" class="file-list empty-state">ยังไม่มีผลลัพธ์</div></div></section>
+      <section class="page" data-page-panel="voices"><div class="page-head"><h1>หอเสียง</h1><p>เลือกบุคลิกเสียงสำหรับภาษาเป้าหมาย</p></div><div class="voice-grid"><button class="voice-card active">จอมยุทธ์สุขุม<small>Male · Calm</small></button><button class="voice-card">นางเอกนุ่มลึก<small>Female · Warm</small></button><button class="voice-card">ผู้บรรยายเข้ม<small>Narrator · Deep</small></button><button class="voice-card">หลายตัวละคร<small>Auto Speaker Match</small></button></div></section>
+      <section class="page" data-page-panel="translate"><div class="page-head"><h1>ภาษาที่รองรับ</h1><p>ระบบถอดเสียง/แปล/พากย์หลายภาษา</p></div><div id="languageCloud" class="language-cloud"></div></section>
+      <section class="page" data-page-panel="storage"><div class="page-head"><h1>คลังยุทธภพ</h1><p>บริหารพื้นที่ R2 และกวาดไฟล์ชั่วคราว</p></div><div class="storage-cards"><div class="panel stat"><span>ใช้ทั้งหมด</span><b id="stTotal">0 GB</b></div><div class="panel stat"><span>ต้นฉบับ</span><b id="stUpload">0 GB</b></div><div class="panel stat"><span>ชั่วคราว</span><b id="stTemp">0 GB</b></div><div class="panel stat"><span>ผลลัพธ์</span><b id="stOutput">0 GB</b></div></div><div class="panel storage-actions"><button id="cleanupBtn" class="btn danger">ล้างไฟล์ชั่วคราว</button><small>ลบเฉพาะไฟล์ใน temp/ ไม่แตะต้นฉบับและผลลัพธ์</small></div></section>
+      <section class="page" data-page-panel="settings"><div class="page-head"><h1>ตั้งค่า</h1><p>การทำงานพื้นฐานของระบบ</p></div><div class="panel settings-panel"><label>จำนวนชิ้นที่อัปโหลดพร้อมกัน<select id="parallelUpload"><option>1</option><option selected>2</option><option>3</option></select></label><label>ธีม<select><option selected>ยุทธภพรัตติกาล</option></select></label><p class="hint">ระบบจริงใช้ Cloudflare R2 สำหรับไฟล์ และสามารถต่อ GitHub Actions สำหรับงาน AI/FFmpeg ได้</p></div></section>
+    </main>
+  </div>
+
+  <div id="loadingOverlay" class="loading-overlay hidden" role="dialog" aria-modal="true">
+    <div class="qi-loader"><div class="qi-ring r1"></div><div class="qi-ring r2"></div><div class="qi-ring r3"></div><div class="qi-core">侠</div><div class="qi-sparks"></div></div>
+    <h3 id="loadingTitle">กำลังรวบรวมพลังปราณ...</h3><p id="loadingText">กำลังเตรียมงาน</p><div class="loading-bar"><i id="loadingBar"></i></div><b id="loadingPercent">0%</b>
+  </div>
+
+  <script src="./app.js" defer></script>
+</body>
+</html>
