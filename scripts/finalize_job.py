@@ -24,6 +24,11 @@ def main() -> None:
     job_id = job["id"]
     target = str(job.get("targetLang") or "th")
     client = WorkerClient(args.worker_url, args.token)
+
+    if client.is_paused(job_id):
+        print("Job is paused before finalization", flush=True)
+        return
+
     client.patch_job(job_id, status="processing", progress=94, stage="กำลังรวมวิดีโอพากย์ทั้งหมด")
 
     work = Path("work_finalize")
@@ -56,10 +61,13 @@ def main() -> None:
         subtitle_key = f"outputs/{job_id}/dub_{target}.srt"
         client.upload(final_srt, subtitle_key, "application/x-subrip")
 
+    if client.is_paused(job_id):
+        print("Job paused before final video assembly", flush=True)
+        return
+
     # The processed chunks are uniform MPEG-TS/H.264/AAC. Feeding their bytes
     # sequentially to one ffmpeg process makes them a continuous stream. ffmpeg
-    # writes fragmented MP4 to stdout; stdout is resumable-uploaded to Google
-    # Drive, so a very large final video never has to fit on the runner disk.
+    # writes fragmented MP4 to stdout and it is streamed to Google Drive.
     cmd = [
         "ffmpeg", "-hide_banner", "-loglevel", "error",
         "-f", "mpegts", "-i", "pipe:0",
