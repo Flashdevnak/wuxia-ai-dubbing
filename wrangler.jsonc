@@ -10,15 +10,10 @@
   "ai": {
     "binding": "AI"
   },
-  "r2_buckets": [
-    {
-      "binding": "MEDIA",
-      "bucket_name": "wuxia-ai-dubbing-media"
-    }
-  ],
   "vars": {
     "APP_NAME": "ยุทธภพ AI Dubbing",
-    "FREE_STORAGE_GB": "10",
+    "GOOGLE_STORAGE_GB": "15",
+    "GOOGLE_DRIVE_FOLDER": "Wuxia AI Dubbing",
     "GITHUB_REPO": "Flashdevnak/wuxia-ai-dubbing",
     "TRANSLATE_MODEL": "@cf/meta/llama-3.1-8b-instruct-fast"
   }
