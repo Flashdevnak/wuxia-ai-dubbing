@@ -1,0 +1,140 @@
+name: Apply retry recovery hotfix
+
+on:
+  push:
+    paths:
+      - '.github/workflows/retry-recovery-hotfix.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Patch retry recovery
+        shell: python
+        run: |
+          from pathlib import Path
+
+          worker_path = Path('src/worker.js')
+          worker = worker_path.read_text(encoding='utf-8')
+          old = """    if (job.sourceType === 'upload' && job.sourceKey) {
+      const src = await resolveLogical(env, job.sourceKey);
+      if (!src) return json({ error: 'ไฟล์ต้นฉบับถูกลบแล้ว จึงทำงานต่อไม่ได้' }, 409);
+    }
+"""
+          new = """    if (job.sourceType === 'upload' && job.sourceKey) {
+      const src = await resolveLogical(env, job.sourceKey);
+      if (!src) {
+        const total = Number(job.chunkTotal || 0);
+        let recoveryReady = Number.isInteger(total) && total > 0;
+        if (recoveryReady) {
+          const files = await listAppFiles(env);
+          const keys = new Set(files.map(f => String(f.appProperties?.logicalKey || '')));
+          for (let i = 0; i < total; i++) {
+            const n = String(i).padStart(5, '0');
+            const required = [
+              `temp/${job.id}/dub/chunk_${n}.ts`,
+              `temp/${job.id}/meta/chunk_${n}.json`,
+              `_state/${job.id}/chunks/${n}.json`,
+            ];
+            if (job.subtitles !== false) required.push(`temp/${job.id}/subs/chunk_${n}.srt`);
+            if (!required.every(key => keys.has(key))) {
+              recoveryReady = false;
+              break;
+            }
+          }
+        }
+        if (!recoveryReady) {
+          return json({ error: 'ไฟล์ต้นฉบับถูกลบแล้ว และไฟล์ที่ทำไว้ยังไม่ครบ กรุณาอัปโหลดต้นฉบับใหม่' }, 409);
+        }
+      }
+    }
+"""
+          if old not in worker:
+              raise SystemExit('worker retry guard anchor not found')
+          worker_path.write_text(worker.replace(old, new, 1), encoding='utf-8')
+
+          prepare_path = Path('scripts/prepare_job.py')
+          prepare = prepare_path.read_text(encoding='utf-8')
+          anchor = """    manifest_path = work / \"manifest.json\"
+    manifest_key = f\"temp/{job_id}/manifest.json\"
+
+    # Retry/resume: if the source was already split successfully, reuse it. This
+"""
+          insert = """    manifest_path = work / \"manifest.json\"
+    manifest_key = f\"temp/{job_id}/manifest.json\"
+
+    # Late-stage retry recovery: if every dubbed chunk and its metadata are
+    # already durable, the original upload and even the prepared source chunks
+    # are no longer required. Emit a synthetic matrix so each dub job can hit
+    # its completion marker and skip straight to finalization.
+    recovery_total = int(job.get(\"chunkTotal\") or 0)
+    if recovery_total > 0:
+        recovery_ready = True
+        for i in range(recovery_total):
+            n = f\"{i:05d}\"
+            required = [
+                f\"_state/{job_id}/chunks/{n}.json\",
+                f\"temp/{job_id}/dub/chunk_{n}.ts\",
+                f\"temp/{job_id}/meta/chunk_{n}.json\",
+            ]
+            if bool(job.get(\"subtitles\", True)):
+                required.append(f\"temp/{job_id}/subs/chunk_{n}.srt\")
+            if not all(client.exists(key) for key in required):
+                recovery_ready = False
+                break
+        if recovery_ready:
+            recovered = {
+                \"jobId\": job_id,
+                \"duration\": float(job.get(\"duration\") or 0),
+                \"total\": recovery_total,
+                \"chunks\": [
+                    {\"index\": i, \"key\": f\"temp/{job_id}/source/chunk_{i:05d}.mkv\", \"size\": 0}
+                    for i in range(recovery_total)
+                ],
+                \"sourceLang\": job.get(\"sourceLang\", \"auto\"),
+                \"targetLang\": job.get(\"targetLang\", \"th\"),
+            }
+            client.patch_job(
+                job_id,
+                status=\"processing\",
+                progress=94,
+                stage=f\"พบไฟล์พากย์ครบ {recovery_total} ช่วง กำลังรวมวิดีโอ\",
+                duration=float(job.get(\"duration\") or 0),
+                chunkTotal=recovery_total,
+            )
+            print(f\"Recovering from {recovery_total} completed dubbed chunks\", flush=True)
+            emit_outputs(recovered, args.github_output)
+            return
+
+    # Retry/resume: if the source was already split successfully, reuse it. This
+"""
+          if anchor not in prepare:
+              raise SystemExit('prepare recovery anchor not found')
+          prepare_path.write_text(prepare.replace(anchor, insert, 1), encoding='utf-8')
+
+      - name: Validate patched files
+        run: |
+          node --check src/worker.js
+          python -m py_compile scripts/prepare_job.py scripts/finalize_job.py scripts/dub_chunk.py scripts/worker_client.py
+
+      - name: Commit hotfix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/worker.js scripts/prepare_job.py
+          git commit -m "Allow retry from completed dubbing checkpoints without source"
+          git push origin HEAD:main
+
+      - name: Deploy patched backend
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run deploy-cloudflare.yml --ref main
