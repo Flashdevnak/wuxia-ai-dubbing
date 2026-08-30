@@ -554,7 +554,30 @@ async function handleApi(request, env, url) {
 
     if (job.sourceType === 'upload' && job.sourceKey) {
       const src = await resolveLogical(env, job.sourceKey);
-      if (!src) return json({ error: 'ไฟล์ต้นฉบับถูกลบแล้ว จึงทำงานต่อไม่ได้' }, 409);
+      if (!src) {
+        const total = Number(job.chunkTotal || 0);
+        let recoveryReady = Number.isInteger(total) && total > 0;
+        if (recoveryReady) {
+          const files = await listAppFiles(env);
+          const keys = new Set(files.map(f => String(f.appProperties?.logicalKey || '')));
+          for (let i = 0; i < total; i++) {
+            const n = String(i).padStart(5, '0');
+            const required = [
+              `temp/${job.id}/dub/chunk_${n}.ts`,
+              `temp/${job.id}/meta/chunk_${n}.json`,
+              `_state/${job.id}/chunks/${n}.json`,
+            ];
+            if (job.subtitles !== false) required.push(`temp/${job.id}/subs/chunk_${n}.srt`);
+            if (!required.every(key => keys.has(key))) {
+              recoveryReady = false;
+              break;
+            }
+          }
+        }
+        if (!recoveryReady) {
+          return json({ error: 'ไฟล์ต้นฉบับถูกลบแล้ว และไฟล์ที่ทำไว้ยังไม่ครบ กรุณาอัปโหลดต้นฉบับใหม่' }, 409);
+        }
+      }
     }
 
     job.pauseRequested = false;

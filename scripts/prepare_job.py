@@ -151,6 +151,46 @@ def main() -> None:
     manifest_path = work / "manifest.json"
     manifest_key = f"temp/{job_id}/manifest.json"
 
+    # Late-stage retry recovery: use completed dubbed chunks even if the original upload is gone.
+    recovery_total = int(job.get("chunkTotal") or 0)
+    if recovery_total > 0:
+        recovery_ready = True
+        for i in range(recovery_total):
+            n = f"{i:05d}"
+            required = [
+                f"_state/{job_id}/chunks/{n}.json",
+                f"temp/{job_id}/dub/chunk_{n}.ts",
+                f"temp/{job_id}/meta/chunk_{n}.json",
+            ]
+            if bool(job.get("subtitles", True)):
+                required.append(f"temp/{job_id}/subs/chunk_{n}.srt")
+            if not all(client.exists(key) for key in required):
+                recovery_ready = False
+                break
+        if recovery_ready:
+            recovered = {
+                "jobId": job_id,
+                "duration": float(job.get("duration") or 0),
+                "total": recovery_total,
+                "chunks": [
+                    {"index": i, "key": f"temp/{job_id}/source/chunk_{i:05d}.mkv", "size": 0}
+                    for i in range(recovery_total)
+                ],
+                "sourceLang": job.get("sourceLang", "auto"),
+                "targetLang": job.get("targetLang", "th"),
+            }
+            client.patch_job(
+                job_id,
+                status="processing",
+                progress=94,
+                stage=f"พบไฟล์พากย์ครบ {recovery_total} ช่วง กำลังรวมวิดีโอ",
+                duration=float(job.get("duration") or 0),
+                chunkTotal=recovery_total,
+            )
+            print(f"Recovering from {recovery_total} completed dubbed chunks", flush=True)
+            emit_outputs(recovered, args.github_output)
+            return
+
     # Retry/resume: if the source was already split successfully, reuse it. This
     # avoids starting a long video from the beginning after a later-stage error.
     try:
