@@ -1,0 +1,24 @@
+name: Validate web project
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: JavaScript syntax check
+        run: |
+          node --check public/app.js
+          node --check src/worker.js
+      - name: Verify required files
+        run: |
+          test -f public/index.html
+          test -f public/styles.css
+          test -f wrangler.jsonc
