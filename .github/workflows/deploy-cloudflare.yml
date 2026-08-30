@@ -2,22 +2,9 @@ name: Deploy Cloudflare Backend
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - 'src/**'
-      - 'public/**'
-      - 'wrangler.jsonc'
-      - 'package.json'
-      - 'package-lock.json'
-      - '.github/workflows/deploy-cloudflare.yml'
 
 permissions:
   contents: read
-
-concurrency:
-  group: cloudflare-production
-  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -38,18 +25,21 @@ jobs:
           ACCESS_KEY: ${{ secrets.WUXIA_ACCESS_KEY }}
           WORKER_TOKEN: ${{ secrets.WORKER_SHARED_TOKEN }}
           DISPATCH_TOKEN: ${{ secrets.GH_DISPATCH_TOKEN }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
         run: |
           test -n "$CLOUDFLARE_API_TOKEN" || (echo 'Missing CLOUDFLARE_API_TOKEN' && exit 1)
           test -n "$CLOUDFLARE_ACCOUNT_ID" || (echo 'Missing CLOUDFLARE_ACCOUNT_ID' && exit 1)
           test -n "$ACCESS_KEY" || (echo 'Missing WUXIA_ACCESS_KEY' && exit 1)
           test -n "$WORKER_TOKEN" || (echo 'Missing WORKER_SHARED_TOKEN' && exit 1)
           test -n "$DISPATCH_TOKEN" || (echo 'Missing GH_DISPATCH_TOKEN' && exit 1)
+          test -n "$GOOGLE_CLIENT_ID" || (echo 'Missing GOOGLE_CLIENT_ID' && exit 1)
+          test -n "$GOOGLE_CLIENT_SECRET" || (echo 'Missing GOOGLE_CLIENT_SECRET' && exit 1)
+          test -n "$GOOGLE_REFRESH_TOKEN" || (echo 'Missing GOOGLE_REFRESH_TOKEN' && exit 1)
 
       - name: Install Wrangler
         run: npm install
-
-      - name: Ensure R2 bucket exists
-        run: npx wrangler r2 bucket create wuxia-ai-dubbing-media || true
 
       - name: Deploy Worker + web assets
         run: npx wrangler deploy
@@ -59,14 +49,21 @@ jobs:
           ACCESS_KEY: ${{ secrets.WUXIA_ACCESS_KEY }}
           WORKER_TOKEN: ${{ secrets.WORKER_SHARED_TOKEN }}
           DISPATCH_TOKEN: ${{ secrets.GH_DISPATCH_TOKEN }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
         run: |
           printf '%s' "$ACCESS_KEY" | npx wrangler secret put ACCESS_KEY
           printf '%s' "$WORKER_TOKEN" | npx wrangler secret put WORKER_SHARED_TOKEN
           printf '%s' "$DISPATCH_TOKEN" | npx wrangler secret put GITHUB_TOKEN
+          printf '%s' "$GOOGLE_CLIENT_ID" | npx wrangler secret put GOOGLE_CLIENT_ID
+          printf '%s' "$GOOGLE_CLIENT_SECRET" | npx wrangler secret put GOOGLE_CLIENT_SECRET
+          printf '%s' "$GOOGLE_REFRESH_TOKEN" | npx wrangler secret put GOOGLE_REFRESH_TOKEN
 
       - name: Deployment summary
         run: |
-          echo '### Cloudflare backend deployed' >> "$GITHUB_STEP_SUMMARY"
+          echo '### Cloudflare + Google Drive backend deployed' >> "$GITHUB_STEP_SUMMARY"
           echo '- Worker: `wuxia-ai-dubbing`' >> "$GITHUB_STEP_SUMMARY"
-          echo '- R2: `wuxia-ai-dubbing-media`' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Storage: Google Drive (`Wuxia AI Dubbing` folder)' >> "$GITHUB_STEP_SUMMARY"
+          echo '- R2: removed / not required' >> "$GITHUB_STEP_SUMMARY"
           echo '- Workers AI translation binding: `AI`' >> "$GITHUB_STEP_SUMMARY"
