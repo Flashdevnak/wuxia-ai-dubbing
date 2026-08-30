@@ -41,7 +41,7 @@ jobs:
           pathlib.Path('job.json').write_text(os.environ['JOB_JSON'], encoding='utf-8')
           PY
       - id: prepare
-        name: Stream source and split into R2 chunks
+        name: Stream source and split into Google Drive chunks
         run: |
           python scripts/prepare_job.py \
             --job job.json \
@@ -123,7 +123,7 @@ jobs:
           import os, pathlib
           pathlib.Path('job.json').write_text(os.environ['JOB_JSON'], encoding='utf-8')
           PY
-      - name: Stream-concatenate and upload final MP4
+      - name: Stream-concatenate and upload final MP4 to Google Drive
         run: |
           python scripts/finalize_job.py \
             --job job.json \
