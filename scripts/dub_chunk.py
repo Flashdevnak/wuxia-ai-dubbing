@@ -161,6 +161,18 @@ def choose_voice(voices: list[str], gap: float, speaker_mode: bool, state: dict)
     return voices[state.get("voice_index", 0) % len(voices)]
 
 
+def pause_checkpoint(client: WorkerClient, job_id: str, label: str) -> bool:
+    try:
+        paused = client.is_paused(job_id)
+    except Exception as exc:
+        print(f"Pause check failed at {label}: {exc}", flush=True)
+        return False
+    if paused:
+        print(f"Job paused at safe checkpoint: {label}", flush=True)
+        return True
+    return False
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--job", required=True)
@@ -175,6 +187,23 @@ def main() -> None:
     job_id = job["id"]
     client = WorkerClient(args.worker_url, args.token)
     mode = str(job.get("processingMode") or "fast")
+
+    out_key = f"temp/{job_id}/dub/chunk_{args.index:05d}.ts"
+    sub_key = f"temp/{job_id}/subs/chunk_{args.index:05d}.srt"
+    meta_key = f"temp/{job_id}/meta/chunk_{args.index:05d}.json"
+    state_key = f"_state/{job_id}/chunks/{args.index:05d}.json"
+
+    # A retry reuses every chunk that already reached the durable completion
+    # marker. Only the missing/failed chunks are processed again.
+    already_done = client.exists(state_key) and client.exists(out_key) and client.exists(meta_key)
+    if bool(job.get("subtitles", True)):
+        already_done = already_done and client.exists(sub_key)
+    if already_done:
+        print(f"Chunk {args.index + 1}/{args.total} already complete; skipping", flush=True)
+        return
+
+    if pause_checkpoint(client, job_id, "before chunk"):
+        return
 
     work = Path(f"work_chunk_{args.index:05d}")
     work.mkdir(parents=True, exist_ok=True)
@@ -214,12 +243,18 @@ def main() -> None:
     whisper_segments = [s for s in seg_iter if str(s.text or "").strip()]
     detected_lang = str(getattr(info, "language", None) or requested_source or "auto")
     target_lang = str(job.get("targetLang") or "th")
-    client.patch_job(job_id, progress=15, stage=f"ถอดเสียงช่วง {args.index + 1}/{args.total} เสร็จ · กำลังแปล")
+    client.patch_job(job_id, progress=15, stage=f"ถอดเสียงช่วง {args.index + 1}/{args.total} เสร็จ กำลังแปล")
+
+    if pause_checkpoint(client, job_id, "after transcription"):
+        return
 
     original_texts = [str(s.text).strip() for s in whisper_segments]
     translated = translate_texts(client, original_texts, detected_lang, target_lang)
     voices = asyncio.run(list_matching_voices(target_lang, str(job.get("voiceMode") or "auto")))
-    client.patch_job(job_id, progress=17, stage=f"แปลช่วง {args.index + 1}/{args.total} เสร็จ · กำลังสร้างเสียง")
+    client.patch_job(job_id, progress=17, stage=f"แปลช่วง {args.index + 1}/{args.total} เสร็จ กำลังสร้างเสียง")
+
+    if pause_checkpoint(client, job_id, "after translation"):
+        return
 
     timeline = AudioSegment.silent(duration=max(1, int(math.ceil(chunk_duration * 1000))), frame_rate=24000)
     timeline = timeline.set_channels(1).set_sample_width(2)
@@ -258,6 +293,9 @@ def main() -> None:
     if plans:
         asyncio.run(synthesize_many(plans, concurrency=4 if mode != "quality" else 3))
 
+    if pause_checkpoint(client, job_id, "after speech generation"):
+        return
+
     successful_tts = 0
     for n, plan in enumerate(plans, 1):
         if not plan.get("tts_ok"):
@@ -293,7 +331,7 @@ def main() -> None:
             client.patch_job(
                 job_id,
                 progress=min(24, 18 + round((n / len(plans)) * 6)),
-                stage=f"สร้างเสียงช่วง {args.index + 1}/{args.total} · {n}/{len(plans)} ประโยค",
+                stage=f"สร้างเสียงช่วง {args.index + 1}/{args.total} {n}/{len(plans)} ประโยค",
             )
 
     if plans and successful_tts == 0:
@@ -304,6 +342,9 @@ def main() -> None:
         raise RuntimeError("ไฟล์เสียงพากย์ไม่มี audio stream")
     subtitle_path.write_text(srt.compose(subtitles), encoding="utf-8")
 
+    if pause_checkpoint(client, job_id, "before audio mix"):
+        return
+
     client.patch_job(job_id, progress=25, stage=f"กำลังผสมเสียงช่วง {args.index + 1}/{args.total}")
     keep_music = bool(job.get("keepMusic", True))
     common_video = [
@@ -313,8 +354,6 @@ def main() -> None:
         "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-f", "mpegts",
     ]
     if keep_music:
-        # The dubbed voice must be split before it is consumed twice: once as the
-        # side-chain control signal and once as the audible voice mixed back in.
         filter_complex = (
             "[0:a:0]aresample=48000,volume=0.95[base];"
             "[1:a:0]aresample=48000,asplit=2[voice_sc][voice_mix];"
@@ -337,9 +376,9 @@ def main() -> None:
     if not output.exists() or output.stat().st_size <= 0:
         raise RuntimeError("FFmpeg did not produce a dubbed video chunk")
 
-    out_key = f"temp/{job_id}/dub/chunk_{args.index:05d}.ts"
-    sub_key = f"temp/{job_id}/subs/chunk_{args.index:05d}.srt"
-    meta_key = f"temp/{job_id}/meta/chunk_{args.index:05d}.json"
+    if pause_checkpoint(client, job_id, "before chunk upload"):
+        return
+
     meta_path.write_text(json.dumps({
         "index": args.index,
         "duration": chunk_duration,
