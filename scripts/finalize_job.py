@@ -58,8 +58,8 @@ def main() -> None:
 
     # The processed chunks are uniform MPEG-TS/H.264/AAC. Feeding their bytes
     # sequentially to one ffmpeg process makes them a continuous stream. ffmpeg
-    # writes fragmented MP4 to stdout; stdout is multipart-uploaded directly to
-    # R2, so a 10+ GB final video never has to fit on the GitHub runner disk.
+    # writes fragmented MP4 to stdout; stdout is resumable-uploaded to Google
+    # Drive, so a very large final video never has to fit on the runner disk.
     cmd = [
         "ffmpeg", "-hide_banner", "-loglevel", "error",
         "-f", "mpegts", "-i", "pipe:0",
@@ -87,7 +87,7 @@ def main() -> None:
             except Exception:
                 pass
 
-    feeder = threading.Thread(target=feed_chunks, name="r2-ts-feeder", daemon=True)
+    feeder = threading.Thread(target=feed_chunks, name="drive-ts-feeder", daemon=True)
     feeder.start()
     output_key = f"outputs/{job_id}/dub_{target}.mp4"
     upload_result = client.upload_stream(proc.stdout, output_key, "video/mp4")
