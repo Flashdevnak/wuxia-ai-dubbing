@@ -106,12 +106,14 @@ async function controlJob(id, action) {''',
 replace_once(
     "public/app.js",
     '''  const mode = j.processingMode === 'quality' ? 'คุณภาพสูง' : j.processingMode === 'balanced' ? 'สมดุล' : 'เร็ว';
-  const control = j.status === 'failed' ''',
+  const control = j.status === 'failed'
+''',
     '''  const mode = j.processingMode === 'quality' ? 'คุณภาพสูง' : j.processingMode === 'balanced' ? 'สมดุล' : 'เร็ว';
   const jobMeta = j.jobType === 'transcript'
     ? `คำบรรยาย YouTube ${langLabel(j.sourceLang)} → ${langLabel(j.targetLang)}`
     : `ต้นฉบับ ${langLabel(j.sourceLang)} พากย์เป็น ${langLabel(j.targetLang)} โหมด${mode}`;
-  const control = j.status === 'failed' ''',
+  const control = j.status === 'failed'
+''',
     "transcript job metadata",
 )
 replace_once(
