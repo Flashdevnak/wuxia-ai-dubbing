@@ -69,7 +69,7 @@ jobs:
           printf '%s' "$GOOGLE_CLIENT_SECRET" | npx wrangler secret put GOOGLE_CLIENT_SECRET
           printf '%s' "$GOOGLE_REFRESH_TOKEN" | npx wrangler secret put GOOGLE_REFRESH_TOKEN
 
-      - name: Smoke test Google Drive resumable upload through Worker
+      - name: Smoke test real-browser direct Google Drive resumable upload
         env:
           ACCESS_KEY: ${{ secrets.WUXIA_ACCESS_KEY }}
           WORKER_URL: https://wuxia-ai-dubbing.26nak-testdev.workers.dev
@@ -79,16 +79,19 @@ jobs:
 
           base = os.environ['WORKER_URL'].rstrip('/')
           access = os.environ['ACCESS_KEY']
-          browser_ua = 'Mozilla/5.0 (Linux; Android 16; SM-S711B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36'
+          origin = base
+          browser_headers = {
+              'x-access-key': access,
+              'User-Agent': 'Mozilla/5.0 (Linux; Android 16; SM-S711B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36',
+              'Accept': 'application/json, text/plain, */*',
+              'Origin': origin,
+              'Sec-Fetch-Site': 'same-origin',
+              'Sec-Fetch-Mode': 'cors',
+              'Sec-CH-UA-Mobile': '?1',
+          }
 
-          def call(path, method='GET', body=None, headers=None):
-              h = {
-                  'x-access-key': access,
-                  'User-Agent': browser_ua,
-                  'Accept': 'application/json, text/plain, */*',
-              }
-              if headers:
-                  h.update(headers)
+          def worker_call(path, method='GET', body=None):
+              h = dict(browser_headers)
               data = body
               if isinstance(body, (dict, list)):
                   data = json.dumps(body).encode()
@@ -97,53 +100,85 @@ jobs:
               try:
                   with urllib.request.urlopen(req, timeout=90) as r:
                       raw = r.read().decode('utf-8', 'replace')
-                      return r.status, json.loads(raw) if raw else {}
+                      return r.status, dict(r.headers), json.loads(raw) if raw else {}
               except urllib.error.HTTPError as e:
                   raw = e.read().decode('utf-8', 'replace')
                   raise RuntimeError(f'{method} {path} -> HTTP {e.code}: {raw[:1200]}')
 
-          _, health = call('/api/health')
+          def google_request(url, method='PUT', body=None, headers=None):
+              h = dict(headers or {})
+              req = urllib.request.Request(url, data=body, headers=h, method=method)
+              try:
+                  with urllib.request.urlopen(req, timeout=90) as r:
+                      return r.status, dict(r.headers), r.read()
+              except urllib.error.HTTPError as e:
+                  if e.code == 308:
+                      return e.code, dict(e.headers), e.read()
+                  raw = e.read().decode('utf-8', 'replace')
+                  raise RuntimeError(f'Google {method} -> HTTP {e.code}: {raw[:1200]}')
+
+          _, _, health = worker_call('/api/health')
           if not health.get('driveReady'):
               raise RuntimeError(f'Drive health failed: {health}')
           print('health: OK')
 
           size = 5 * 1024 * 1024
-          _, started = call('/api/uploads/start', 'POST', {
-              'name': '__deploy_smoke_multichunk__.bin',
+          _, _, started = worker_call('/api/uploads/start', 'POST', {
+              'name': '__deploy_browser_direct__.bin',
               'size': size,
               'type': 'application/octet-stream',
           })
+          if not started.get('directUpload') or not started.get('directSession'):
+              raise RuntimeError(f'Direct browser upload was not enabled: {started}')
+          if int(started.get('partSize', 0)) != 4 * 1024 * 1024:
+              raise RuntimeError(f'Unexpected mobile direct partSize={started.get("partSize")}')
           key = started['key']
           upload_id = started['uploadId']
-          part_size = int(started['partSize'])
-          if part_size != 4 * 1024 * 1024:
-              raise RuntimeError(f'Unexpected partSize={part_size}')
-          print(f'upload start: OK (partSize={part_size})')
+          session = started['directSession']
+          print('browser start: OK (direct session, 4 MiB mobile chunk)')
 
-          parts = []
-          first = b'A' * part_size
-          q1 = urllib.parse.urlencode({'key': key, 'uploadId': upload_id, 'partNumber': 1})
-          _, p1 = call('/api/uploads/part?' + q1, 'POST', first, {'content-type': 'application/octet-stream'})
-          if p1.get('complete'):
-              raise RuntimeError(f'First chunk completed unexpectedly: {p1}')
-          parts.append({'partNumber': 1, 'etag': p1.get('etag')})
-          print('upload chunk 1/2 via POST: OK (resume incomplete handled)')
+          # Verify the browser CORS preflight that Content-Range PUT requires.
+          status, cors, _ = google_request(session, 'OPTIONS', None, {
+              'Origin': origin,
+              'Access-Control-Request-Method': 'PUT',
+              'Access-Control-Request-Headers': 'content-range,content-type',
+          })
+          allow_origin = cors.get('Access-Control-Allow-Origin') or cors.get('access-control-allow-origin')
+          if status not in (200, 204) or allow_origin not in ('*', origin):
+              raise RuntimeError(f'Google resumable CORS preflight failed: status={status}, allow-origin={allow_origin}, headers={cors}')
+          print('Google resumable CORS preflight: OK')
 
-          second = b'B' * (size - part_size)
-          q2 = urllib.parse.urlencode({'key': key, 'uploadId': upload_id, 'partNumber': 2})
-          _, p2 = call('/api/uploads/part?' + q2, 'POST', second, {'content-type': 'application/octet-stream'})
-          if not p2.get('complete'):
-              raise RuntimeError(f'Final chunk did not complete: {p2}')
-          parts.append({'partNumber': 2, 'etag': p2.get('etag')})
-          print('upload chunk 2/2 via POST: OK')
+          first_size = 4 * 1024 * 1024
+          status, headers, _ = google_request(session, 'PUT', b'A' * first_size, {
+              'Origin': origin,
+              'Content-Type': 'application/octet-stream',
+              'Content-Range': f'bytes 0-{first_size-1}/{size}',
+          })
+          if status != 308:
+              raise RuntimeError(f'Expected 308 after first direct chunk, got {status}')
+          print('direct Google chunk 1/2: OK')
 
-          _, done = call('/api/uploads/complete', 'POST', {'key': key, 'uploadId': upload_id, 'parts': parts})
+          second_size = size - first_size
+          status, headers, raw = google_request(session, 'PUT', b'B' * second_size, {
+              'Origin': origin,
+              'Content-Type': 'application/octet-stream',
+              'Content-Range': f'bytes {first_size}-{size-1}/{size}',
+          })
+          if status not in (200, 201):
+              raise RuntimeError(f'Expected final 200/201, got {status}: {raw[:500]!r}')
+          print('direct Google chunk 2/2: OK')
+
+          _, _, done = worker_call('/api/uploads/complete', 'POST', {
+              'key': key,
+              'uploadId': upload_id,
+              'parts': [],
+          })
           if int(done.get('size', -1)) != size:
               raise RuntimeError(f'Upload size mismatch: {done}')
-          print('upload complete: OK')
+          print('Worker verifies Drive file size: OK')
 
           dq = urllib.parse.urlencode({'key': key})
-          _, deleted = call('/api/files?' + dq, 'DELETE')
+          _, _, deleted = worker_call('/api/files?' + dq, 'DELETE')
           if not deleted.get('ok'):
               raise RuntimeError(f'Cleanup failed: {deleted}')
           print('cleanup: OK')
@@ -153,7 +188,7 @@ jobs:
         run: |
           echo '### Cloudflare + Google Drive backend deployed' >> "$GITHUB_STEP_SUMMARY"
           echo '- Worker: `wuxia-ai-dubbing`' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Storage: Google Drive (`Wuxia AI Dubbing` folder)' >> "$GITHUB_STEP_SUMMARY"
-          echo '- R2: removed / not required' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Browser upload: Worker creates session, browser sends bytes directly to Google Drive' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Mobile chunk: 4 MiB; desktop chunk: 16 MiB' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Google resumable CORS preflight + direct 5 MiB / 2-chunk upload: tested' >> "$GITHUB_STEP_SUMMARY"
           echo '- Workers AI translation binding: `AI`' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Real 5 MiB / 2-chunk POST resumable upload smoke test: passed' >> "$GITHUB_STEP_SUMMARY"
