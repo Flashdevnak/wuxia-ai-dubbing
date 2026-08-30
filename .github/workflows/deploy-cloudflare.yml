@@ -50,7 +50,7 @@ jobs:
       - name: Install Wrangler
         run: npm install
 
-      - name: Deploy Worker + web assets
+      - name: Deploy clean Worker + web assets
         run: npx wrangler deploy
 
       - name: Set private Worker secrets
@@ -69,102 +69,157 @@ jobs:
           printf '%s' "$GOOGLE_CLIENT_SECRET" | npx wrangler secret put GOOGLE_CLIENT_SECRET
           printf '%s' "$GOOGLE_REFRESH_TOKEN" | npx wrangler secret put GOOGLE_REFRESH_TOKEN
 
-      - name: Smoke test mobile same-origin Base64 upload
+      - name: Smoke test public multipart + internal pipeline uploads
         env:
           ACCESS_KEY: ${{ secrets.WUXIA_ACCESS_KEY }}
+          WORKER_TOKEN: ${{ secrets.WORKER_SHARED_TOKEN }}
           WORKER_URL: https://wuxia-ai-dubbing.26nak-testdev.workers.dev
         run: |
           python - <<'PY'
-          import base64, json, os, urllib.parse, urllib.request, urllib.error
+          import io, json, os, urllib.parse, urllib.request, urllib.error, uuid
 
           base = os.environ['WORKER_URL'].rstrip('/')
           access = os.environ['ACCESS_KEY']
-          headers = {
-              'x-access-key': access,
-              'User-Agent': 'Mozilla/5.0 (Linux; Android 16; SM-S711B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36',
-              'Accept': 'application/json, text/plain, */*',
-              'Origin': base,
-              'Sec-Fetch-Site': 'same-origin',
-              'Sec-Fetch-Mode': 'cors',
-              'Sec-CH-UA-Mobile': '?1',
-          }
+          worker_token = os.environ['WORKER_TOKEN']
 
-          def call(path, method='GET', body=None):
-              h = dict(headers)
+          def request(path, method='GET', body=None, headers=None, expect_json=True):
+              h = dict(headers or {})
               data = body
-              if isinstance(body, (dict, list)):
-                  data = json.dumps(body).encode()
-                  h['content-type'] = 'application/json'
               req = urllib.request.Request(base + path, data=data, headers=h, method=method)
               try:
-                  with urllib.request.urlopen(req, timeout=90) as r:
-                      raw = r.read().decode('utf-8', 'replace')
-                      return r.status, json.loads(raw) if raw else {}
+                  with urllib.request.urlopen(req, timeout=120) as r:
+                      raw = r.read()
+                      if not expect_json:
+                          return r.status, dict(r.headers), raw
+                      return r.status, dict(r.headers), json.loads(raw.decode('utf-8')) if raw else {}
               except urllib.error.HTTPError as e:
                   raw = e.read().decode('utf-8', 'replace')
-                  raise RuntimeError(f'{method} {path} -> HTTP {e.code}: {raw[:1200]}')
+                  raise RuntimeError(f'{method} {path} -> HTTP {e.code}: {raw[:1600]}')
 
-          _, health = call('/api/health')
-          if not health.get('driveReady'):
-              raise RuntimeError(f'Drive health failed: {health}')
-          print('health: OK')
+          def public_json(path, method='GET', payload=None):
+              body = None if payload is None else json.dumps(payload).encode()
+              headers = {'x-access-key': access, 'Accept': 'application/json'}
+              if body is not None:
+                  headers['content-type'] = 'application/json'
+              return request(path, method, body, headers)[2]
 
-          part_size = 1024 * 1024
-          size = part_size * 2 + 333333
-          _, started = call('/api/uploads/start-safe', 'POST', {
-              'name': '__deploy_mobile_safe__.bin',
-              'size': size,
+          def internal_json(path, method='GET', payload=None):
+              body = None if payload is None else json.dumps(payload).encode()
+              headers = {'x-worker-token': worker_token, 'Accept': 'application/json'}
+              if body is not None:
+                  headers['content-type'] = 'application/json'
+              return request(path, method, body, headers)[2]
+
+          def multipart_chunk(key, upload_id, part_number, chunk):
+              boundary = '----wuxia' + uuid.uuid4().hex
+              buf = io.BytesIO()
+              def field(name, value):
+                  buf.write(f'--{boundary}\r\n'.encode())
+                  buf.write(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode())
+                  buf.write(str(value).encode())
+                  buf.write(b'\r\n')
+              field('key', key)
+              field('uploadId', upload_id)
+              field('partNumber', part_number)
+              buf.write(f'--{boundary}\r\n'.encode())
+              buf.write(b'Content-Disposition: form-data; name="chunk"; filename="chunk.bin"\r\n')
+              buf.write(b'Content-Type: application/octet-stream\r\n\r\n')
+              buf.write(chunk)
+              buf.write(b'\r\n')
+              buf.write(f'--{boundary}--\r\n'.encode())
+              body = buf.getvalue()
+              headers = {
+                  'x-access-key': access,
+                  'content-type': f'multipart/form-data; boundary={boundary}',
+                  'content-length': str(len(body)),
+                  'Accept': 'application/json',
+              }
+              return request('/api/uploads/chunk', 'POST', body, headers)[2]
+
+          health = request('/api/health')[2]
+          assert health.get('driveReady'), health
+          assert health.get('core') == 'clean-v2', health
+          assert health.get('uploadMode') == 'same-origin-multipart', health
+          print('health clean-v2: OK')
+
+          part_size = 2 * 1024 * 1024
+          source = b'A' * part_size + b'B' * part_size + b'C' * (1024 * 1024)
+          started = public_json('/api/uploads/start', 'POST', {
+              'name': '__core2_public_smoke__.bin',
+              'size': len(source),
               'type': 'application/octet-stream',
           })
-          if not started.get('safeUpload') or int(started.get('partSize', 0)) != part_size:
-              raise RuntimeError(f'Safe mobile upload start failed: {started}')
-          key = started['key']
-          upload_id = started['uploadId']
-          print('safe upload start: OK (1 MiB JSON chunks)')
+          assert int(started['partSize']) == part_size, started
+          key, upload_id = started['key'], started['uploadId']
+          print('public start: OK')
 
-          parts = []
-          offset = 0
-          part_number = 1
-          while offset < size:
-              length = min(part_size, size - offset)
-              raw = bytes([64 + part_number]) * length
-              payload = {
-                  'key': key,
-                  'uploadId': upload_id,
-                  'partNumber': part_number,
-                  'mimeType': 'application/octet-stream',
-                  'data': base64.b64encode(raw).decode('ascii'),
-              }
-              _, result = call('/api/uploads/base64-part', 'POST', payload)
-              if int(result.get('partNumber', -1)) != part_number:
-                  raise RuntimeError(f'Chunk {part_number} not confirmed: {result}')
-              parts.append({'partNumber': part_number, 'etag': result.get('etag')})
-              print(f'safe Base64 chunk {part_number}: OK ({length} bytes decoded)')
-              offset += length
-              part_number += 1
+          for i in range(3):
+              chunk = source[i * part_size:(i + 1) * part_size]
+              result = multipart_chunk(key, upload_id, i + 1, chunk)
+              assert int(result.get('partNumber', -1)) == i + 1, result
+              print(f'public multipart chunk {i+1}/3: OK')
+              if i == 0:
+                  status = public_json('/api/uploads/status', 'POST', {'key': key, 'uploadId': upload_id})
+                  assert int(status.get('nextOffset', -1)) == part_size, status
+                  print('public resume status after chunk 1: OK')
 
-          _, done = call('/api/uploads/complete', 'POST', {
-              'key': key,
-              'uploadId': upload_id,
-              'parts': parts,
+          done = public_json('/api/uploads/complete', 'POST', {'key': key, 'uploadId': upload_id})
+          assert int(done.get('size', -1)) == len(source), done
+          q = urllib.parse.urlencode({'key': key, 'access_key': access})
+          downloaded = request('/api/files/download?' + q, expect_json=False)[2]
+          assert downloaded == source, (len(downloaded), len(source))
+          print('public final byte-for-byte download: OK')
+          deleted = public_json('/api/files?' + urllib.parse.urlencode({'key': key}), 'DELETE')
+          assert deleted.get('ok')
+
+          internal_source = b'I' * (3 * 1024 * 1024)
+          ikey = 'temp/__core2_internal_smoke__/known.bin'
+          istart = internal_json('/api/internal/uploads/start', 'POST', {
+              'key': ikey,
+              'size': len(internal_source),
+              'type': 'application/octet-stream',
           })
-          if int(done.get('size', -1)) != size:
-              raise RuntimeError(f'Upload size mismatch: {done}')
-          print('Drive final size verification: OK')
+          iq = urllib.parse.urlencode({'key': ikey, 'uploadId': istart['uploadId'], 'partNumber': 1})
+          request('/api/internal/uploads/part?' + iq, 'PUT', internal_source, {
+              'x-worker-token': worker_token,
+              'content-type': 'application/octet-stream',
+              'content-length': str(len(internal_source)),
+          })
+          idone = internal_json('/api/internal/uploads/complete', 'POST', {'key': ikey, 'uploadId': istart['uploadId'], 'parts': []})
+          assert int(idone.get('size', -1)) == len(internal_source), idone
+          idata = request('/api/internal/file?' + urllib.parse.urlencode({'key': ikey}), headers={'x-worker-token': worker_token}, expect_json=False)[2]
+          assert idata == internal_source
+          public_json('/api/files?' + urllib.parse.urlencode({'key': ikey}), 'DELETE')
+          print('internal known-size pipeline upload: OK')
 
-          dq = urllib.parse.urlencode({'key': key})
-          _, deleted = call('/api/files?' + dq, 'DELETE')
-          if not deleted.get('ok'):
-              raise RuntimeError(f'Cleanup failed: {deleted}')
-          print('cleanup: OK')
+          stream_source = b'S' * (1024 * 1024 + 777)
+          skey = 'temp/__core2_internal_smoke__/stream.bin'
+          sstart = internal_json('/api/internal/uploads/start', 'POST', {
+              'key': skey,
+              'type': 'application/octet-stream',
+          })
+          sq = urllib.parse.urlencode({
+              'key': skey,
+              'uploadId': sstart['uploadId'],
+              'partNumber': 1,
+              'finalTotal': len(stream_source),
+          })
+          request('/api/internal/uploads/part?' + sq, 'PUT', stream_source, {
+              'x-worker-token': worker_token,
+              'content-type': 'application/octet-stream',
+              'content-length': str(len(stream_source)),
+          })
+          sdone = internal_json('/api/internal/uploads/complete', 'POST', {'key': skey, 'uploadId': sstart['uploadId'], 'parts': []})
+          assert int(sdone.get('size', -1)) == len(stream_source), sdone
+          public_json('/api/files?' + urllib.parse.urlencode({'key': skey}), 'DELETE')
+          print('internal unknown-size streaming upload: OK')
           PY
 
       - name: Deployment summary
         run: |
-          echo '### Cloudflare + Google Drive backend deployed' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Worker: `wuxia-ai-dubbing`' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Mobile upload: same-origin Base64 JSON -> Worker -> Google Drive' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Mobile chunk: 1 MiB decoded; no browser-to-Google CORS and no raw binary browser POST' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Safe upload smoke test: 3 chunks + Drive size verification passed' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Desktop direct upload remains available' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Workers AI translation binding: `AI`' >> "$GITHUB_STEP_SUMMARY"
+          echo '### Clean Core 2.0 deployed' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Worker: `src/worker.js` + `src/storage.js`' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Browser upload: same-origin multipart/form-data, 2 MiB chunks, resumable' >> "$GITHUB_STEP_SUMMARY"
+          echo '- No browser FileReader/Base64/direct-Google upload patches' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Public upload: 3 chunks + resume status + byte-for-byte download passed' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Internal pipeline known-size + unknown-size streaming uploads passed' >> "$GITHUB_STEP_SUMMARY"
