@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import json
 import mimetypes
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 from urllib.parse import quote
 
 import requests
@@ -53,41 +52,71 @@ class WorkerClient:
                         f.write(chunk)
         return destination
 
-    def upload(self, source: str | Path, key: str, content_type: str | None = None) -> dict[str, Any]:
-        source = Path(source)
-        content_type = content_type or mimetypes.guess_type(source.name)[0] or "application/octet-stream"
+    def iter_object(self, key: str, chunk_size: int = 8 * 1024 * 1024):
+        url = self.base_url + "/api/internal/file?key=" + quote(key, safe="")
+        with requests.get(url, headers=self.headers, stream=True, timeout=(30, 600)) as r:
+            if not r.ok:
+                raise RuntimeError(f"Download {key} failed: {r.status_code} {r.text[:1000]}")
+            for chunk in r.iter_content(chunk_size=chunk_size):
+                if chunk:
+                    yield chunk
+
+    def _start_upload(self, key: str, content_type: str) -> tuple[str, int]:
         init = self._json("POST", "/api/internal/uploads/start", json={"key": key, "type": content_type})
         upload_id = init["uploadId"]
         part_size = min(int(init.get("partSize") or 32 * 1024 * 1024), 32 * 1024 * 1024)
+        return upload_id, part_size
+
+    def _upload_part(self, key: str, upload_id: str, part_number: int, data: bytes) -> dict[str, Any]:
+        url = (
+            f"/api/internal/uploads/part?key={quote(key, safe='')}"
+            f"&uploadId={quote(upload_id, safe='')}&partNumber={part_number}"
+        )
+        part = self._json(
+            "PUT",
+            url,
+            data=data,
+            headers={"content-type": "application/octet-stream", "content-length": str(len(data))},
+        )
+        return {"partNumber": int(part["partNumber"]), "etag": part["etag"]}
+
+    def _complete_upload(self, key: str, upload_id: str, parts: list[dict[str, Any]]) -> dict[str, Any]:
+        return self._json(
+            "POST",
+            "/api/internal/uploads/complete",
+            json={"key": key, "uploadId": upload_id, "parts": parts},
+        )
+
+    def upload(self, source: str | Path, key: str, content_type: str | None = None) -> dict[str, Any]:
+        source = Path(source)
+        content_type = content_type or mimetypes.guess_type(source.name)[0] or "application/octet-stream"
+        upload_id, part_size = self._start_upload(key, content_type)
         parts: list[dict[str, Any]] = []
-        try:
-            with source.open("rb") as f:
-                part_number = 1
-                while True:
-                    data = f.read(part_size)
-                    if not data:
-                        break
-                    url = (
-                        f"/api/internal/uploads/part?key={quote(key, safe='')}"
-                        f"&uploadId={quote(upload_id, safe='')}&partNumber={part_number}"
-                    )
-                    part = self._json(
-                        "PUT",
-                        url,
-                        data=data,
-                        headers={"content-type": "application/octet-stream", "content-length": str(len(data))},
-                    )
-                    parts.append({"partNumber": int(part["partNumber"]), "etag": part["etag"]})
-                    part_number += 1
-            return self._json(
-                "POST",
-                "/api/internal/uploads/complete",
-                json={"key": key, "uploadId": upload_id, "parts": parts},
-            )
-        except Exception:
-            # An unfinished R2 multipart upload expires automatically. We deliberately
-            # avoid a second failure masking the original exception here.
-            raise
+        with source.open("rb") as f:
+            part_number = 1
+            while True:
+                data = f.read(part_size)
+                if not data:
+                    break
+                parts.append(self._upload_part(key, upload_id, part_number, data))
+                part_number += 1
+        return self._complete_upload(key, upload_id, parts)
+
+    def upload_stream(self, stream: BinaryIO, key: str, content_type: str = "application/octet-stream") -> dict[str, Any]:
+        upload_id, part_size = self._start_upload(key, content_type)
+        parts: list[dict[str, Any]] = []
+        total = 0
+        part_number = 1
+        while True:
+            data = stream.read(part_size)
+            if not data:
+                break
+            total += len(data)
+            parts.append(self._upload_part(key, upload_id, part_number, data))
+            part_number += 1
+        result = self._complete_upload(key, upload_id, parts)
+        result.setdefault("size", total)
+        return result
 
     def mark_chunk_complete(self, job_id: str, index: int, total: int) -> dict[str, Any]:
         return self._json(
