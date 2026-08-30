@@ -295,6 +295,40 @@ async function createJob() {
   await Promise.all([loadJobs(), loadStorage()]);
 }
 
+async function extractLinkTranscript() {
+  const sourceUrl = $('#videoUrl')?.value.trim();
+  if (!sourceUrl) throw new Error('กรุณาวางลิงก์ YouTube ก่อน');
+  try {
+    const u = new URL(sourceUrl);
+    if (!['http:', 'https:'].includes(u.protocol)) throw new Error('bad protocol');
+  } catch {
+    throw new Error('กรุณาตรวจสอบลิงก์อีกครั้ง');
+  }
+
+  const targetLang = $('#targetLang')?.value || 'th';
+  const payload = {
+    jobType: 'transcript',
+    title: `คำบรรยาย YouTube ${new Date().toLocaleString('th-TH')}`,
+    sourceType: 'link',
+    sourceUrl,
+    sourceLang: $('#sourceLang')?.value || 'auto',
+    targetLang,
+    subtitles: true,
+    keepMusic: false,
+    speakerSeparation: false,
+    autoCleanup: false,
+  };
+
+  showLoader('กำลังดึงคำบรรยาย', 'กำลังอ่านซับและเวลาเริ่ม–จบจาก YouTube', 5);
+  const data = await api('/api/jobs', { method: 'POST', body: JSON.stringify(payload) });
+  updateLoader(data.dispatch?.triggered ? 'ส่งงานดึงคำบรรยายแล้ว' : 'สร้างงานแล้ว แต่ระบบยังเริ่มไม่ได้', 15);
+  $('#message').textContent = data.dispatch?.triggered
+    ? `✓ กำลังดึงคำบรรยายเป็น ${langLabel(targetLang)} เมื่อเสร็จจะมีปุ่ม XML ซับ และคำบรรยาย`
+    : 'สร้างงานแล้ว แต่ระบบดึงคำบรรยายยังไม่พร้อม';
+  await loadJobs();
+  setTimeout(hideLoader, 500);
+}
+
 async function controlJob(id, action) {
   const text = action === 'pause' ? 'กำลังหยุดงาน' : action === 'resume' ? 'กำลังทำงานต่อ' : 'กำลังลองใหม่';
   if ($('#message')) $('#message').textContent = text;
@@ -328,6 +362,9 @@ function jobHtml(j) {
   const statusClass = j.status === 'failed' ? 'failed' : j.status === 'completed' ? 'completed' : 'processing';
   const err = friendlyError(j.error);
   const mode = j.processingMode === 'quality' ? 'คุณภาพสูง' : j.processingMode === 'balanced' ? 'สมดุล' : 'เร็ว';
+  const jobMeta = j.jobType === 'transcript'
+    ? `คำบรรยาย YouTube ${langLabel(j.sourceLang)} → ${langLabel(j.targetLang)}`
+    : `ต้นฉบับ ${langLabel(j.sourceLang)} พากย์เป็น ${langLabel(j.targetLang)} โหมด${mode}`;
   const control = j.status === 'failed'
     ? `<button class="mini-btn" data-job-action="retry" data-job-id="${esc(j.id)}">↻ ลองใหม่</button>`
     : j.status === 'paused'
@@ -336,7 +373,7 @@ function jobHtml(j) {
         ? `<button class="mini-btn" data-job-action="pause" data-job-id="${esc(j.id)}">⏸ หยุดชั่วคราว</button>`
         : '';
   return `<article class="job-card ${statusClass}">
-    <div class="job-top"><div class="job-copy"><div class="job-title">${esc(j.title)}</div><div class="job-meta">ต้นฉบับ ${esc(langLabel(j.sourceLang))} พากย์เป็น ${esc(langLabel(j.targetLang))} โหมด${mode}</div><div class="job-stage"><span></span>${esc(statusText)}</div>${err ? `<div class="job-error">${esc(err)}</div>` : ''}</div>
+    <div class="job-top"><div class="job-copy"><div class="job-title">${esc(j.title)}</div><div class="job-meta">${esc(jobMeta)}</div><div class="job-stage"><span></span>${esc(statusText)}</div>${err ? `<div class="job-error">${esc(err)}</div>` : ''}</div>
     <div class="job-actions">${control}${j.outputKey ? `<button class="mini-btn" data-file="${esc(j.outputKey)}">ดาวน์โหลด MP4</button>` : ''}${j.subtitleKey ? `<button class="mini-btn" data-file="${esc(j.subtitleKey)}">คำบรรยาย</button>` : ''}${j.transcriptXmlKey ? `<button class="mini-btn" data-file="${esc(j.transcriptXmlKey)}">XML ซับ</button>` : ''}<button class="mini-btn danger" data-delete-job="${esc(j.id)}">ลบ</button></div></div>
     <div class="sword-progress job-sword"><i><em style="width:${p}%"></em></i><span class="sword-hilt">◆</span></div>
     <div class="job-foot"><b>${p}%</b><span>อัปเดต ${new Date(j.updatedAt || j.createdAt).toLocaleString('th-TH')}</span></div>
@@ -424,15 +461,9 @@ function bind() {
   $('#uploadCard')?.addEventListener('click', () => setMode('upload'));
   $('#processingMode')?.addEventListener('change', updateSpeedNote);
 
-  $('#analyzeLinkBtn')?.addEventListener('click', () => {
-    const v = $('#videoUrl')?.value.trim();
-    try {
-      const u = new URL(v);
-      if (!['http:', 'https:'].includes(u.protocol)) throw new Error('bad protocol');
-      $('#message').textContent = '✓ ลิงก์ใช้ได้ พร้อมเริ่มงาน';
-    } catch {
-      $('#message').textContent = 'กรุณาตรวจสอบลิงก์อีกครั้ง';
-    }
+  $('#analyzeLinkBtn')?.addEventListener('click', async () => {
+    try { await extractLinkTranscript(); }
+    catch (e) { hideLoader(); $('#message').textContent = e.message; }
   });
 
   $('#fileInput')?.addEventListener('change', async e => {

@@ -257,10 +257,11 @@ function githubHeaders(env) {
 
 async function triggerGitHub(env, job, workerBase) {
   if (!env.GITHUB_REPO || !env.GITHUB_TOKEN) return { triggered: false, reason: 'GitHub dispatch not configured' };
+  const eventType = job.jobType === 'transcript' ? 'transcript_job' : 'dubbing_job';
   const res = await fetch(`https://api.github.com/repos/${env.GITHUB_REPO}/dispatches`, {
     method: 'POST',
     headers: githubHeaders(env),
-    body: JSON.stringify({ event_type: 'dubbing_job', client_payload: { job, workerBase } }),
+    body: JSON.stringify({ event_type: eventType, client_payload: { job, workerBase } }),
   });
   return { triggered: res.ok, status: res.status, detail: res.ok ? undefined : await res.text() };
 }
@@ -517,9 +518,11 @@ async function handleApi(request, env, url) {
       if (!src) return json({ error: 'uploaded file not found' }, 404);
     }
     if (body.sourceType === 'link' && !/^https?:\/\//i.test(body.sourceUrl || '')) return json({ error: 'invalid source url' }, 400);
+    if (body.jobType === 'transcript' && body.sourceType !== 'link') return json({ error: 'คำบรรยาย YouTube ต้องใช้ลิงก์' }, 400);
     const job = {
       id: crypto.randomUUID(),
-      title: body.title || 'งานพากย์ใหม่',
+      jobType: body.jobType === 'transcript' ? 'transcript' : 'dubbing',
+      title: body.title || (body.jobType === 'transcript' ? 'ดึงคำบรรยาย YouTube' : 'งานพากย์ใหม่'),
       sourceType: body.sourceType || 'upload',
       sourceKey: body.sourceKey || null,
       sourceUrl: body.sourceUrl || null,
@@ -535,7 +538,7 @@ async function handleApi(request, env, url) {
       retryCount: 0,
       status: 'queued',
       progress: 3,
-      stage: 'เข้าคิวประมวลผล',
+      stage: body.jobType === 'transcript' ? 'เข้าคิวดึงคำบรรยาย' : 'เข้าคิวประมวลผล',
       createdAt: new Date().toISOString(),
     };
     await writeJob(env, job);
