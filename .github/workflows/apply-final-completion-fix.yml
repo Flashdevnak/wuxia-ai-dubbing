@@ -18,37 +18,27 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       WORKER_URL: https://wuxia-ai-dubbing.26nak-testdev.workers.dev
-      ACCESS_KEY: ${{ secrets.WUXIA_ACCESS_KEY }}
-      WORKER_TOKEN: ${{ secrets.WORKER_SHARED_TOKEN }}
     steps:
       - uses: actions/checkout@v6
 
-      - name: Apply completion, cleanup and fast merge fixes
+      - name: Apply completion, cleanup and merge fixes
         run: |
           python - <<'PY'
           from pathlib import Path
+          import re
 
-          def replace_once(path, old, new, label):
+          def sub(path, pattern, replacement, label, flags=re.S):
               p = Path(path)
               text = p.read_text(encoding='utf-8')
-              if old not in text:
-                  raise SystemExit(f'Patch target not found: {label} in {path}')
-              text = text.replace(old, new, 1)
-              p.write_text(text, encoding='utf-8')
+              new, count = re.subn(pattern, lambda m: replacement, text, count=1, flags=flags)
+              if count != 1:
+                  raise SystemExit(f'Patch target count {count}: {label} in {path}')
+              p.write_text(new, encoding='utf-8')
               print('patched:', label)
 
-          # storage.js: bounded prefix deletion so every HTTP request stays under
-          # Cloudflare's subrequest budget.
-          replace_once('src/storage.js', '''async function deletePrefix(env, prefix) {
-            const files = await listAppFiles(env);
-            const matches = files.filter(f => String(f.appProperties?.logicalKey || '').startsWith(prefix));
-            let bytes = 0;
-            for (const f of matches) {
-              bytes += Number(f.size || 0);
-              await driveFetch(env, `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(f.id)}`, { method: 'DELETE' });
-            }
-            return { bytes, count: matches.length };
-          }''', '''async function deletePrefix(env, prefix, limit = null) {
+          sub('src/storage.js',
+              r"async function deletePrefix\(env, prefix\) \{.*?\n\}\n\nasync function storageInfo",
+              '''async function deletePrefix(env, prefix, limit = null) {
             const files = await listAppFiles(env);
             const allMatches = files.filter(f => String(f.appProperties?.logicalKey || '').startsWith(prefix));
             const requested = Number(limit);
@@ -62,44 +52,20 @@ jobs:
               await driveFetch(env, `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(f.id)}`, { method: 'DELETE' });
             }
             return { bytes, count: matches.length, remaining: Math.max(0, allMatches.length - matches.length) };
-          }''', 'bounded deletePrefix')
+          }
 
-          # Worker version marker.
-          p = Path('src/worker.js')
-          text = p.read_text(encoding='utf-8')
+          async function storageInfo''', 'bounded deletePrefix')
+
+          worker = Path('src/worker.js')
+          text = worker.read_text(encoding='utf-8')
           if "core: 'clean-v2.2'" not in text:
-              raise SystemExit('Worker core marker target not found')
-          text = text.replace("core: 'clean-v2.2'", "core: 'clean-v2.3'", 1)
-          p.write_text(text, encoding='utf-8')
+              raise SystemExit('Worker core marker not found')
+          worker.write_text(text.replace("core: 'clean-v2.2'", "core: 'clean-v2.3'", 1), encoding='utf-8')
+          print('patched: core marker')
 
-          # Completion must succeed before cleanup. Cleanup is performed later in
-          # fresh Worker invocations by the finalizer.
-          replace_once('src/worker.js', '''  if (p === '/api/internal/complete' && request.method === 'POST') {
-            const body = await request.json();
-            const job = await readJob(env, body.jobId);
-            if (!job) return json({ error: 'not found' }, 404);
-            job.status = 'completed';
-            job.pauseRequested = false;
-            job.progress = 100;
-            job.stage = 'เสร็จสมบูรณ์';
-            job.outputKey = body.outputKey || job.outputKey;
-            job.subtitleKey = body.subtitleKey || job.subtitleKey;
-            job.duration = body.duration || job.duration;
-            job.sizeBytes = body.sizeBytes || job.sizeBytes;
-            job.error = null;
-            await writeJob(env, job);
-            let freedBytes = 0;
-            if (job.autoCleanup) {
-              freedBytes += (await deletePrefix(env, `temp/${job.id}/`)).bytes;
-              freedBytes += (await deletePrefix(env, `_state/${job.id}/`)).bytes;
-              if (job.sourceType === 'upload' && body.deleteSource === true && job.sourceKey) {
-                freedBytes += await deleteLogical(env, job.sourceKey);
-                job.sourceKey = null;
-                await writeJob(env, job);
-              }
-            }
-            return json({ ok: true, job, freedBytes });
-          }''', '''  if (p === '/api/internal/complete' && request.method === 'POST') {
+          sub('src/worker.js',
+              r"  if \(p === '/api/internal/complete' && request\.method === 'POST'\) \{.*?\n  \}\n\n  if \(p === '/api/internal/fail'",
+              '''  if (p === '/api/internal/complete' && request.method === 'POST') {
             const body = await request.json();
             const job = await readJob(env, body.jobId);
             if (!job) return json({ error: 'not found' }, 404);
@@ -132,12 +98,16 @@ jobs:
               }
             }
             return json({ ok: true, kind, ...result });
-          }''', 'complete before cleanup')
+          }
 
-          # Recover a completed MP4 before checking whether the original upload
-          # still exists. This repairs jobs where finish() failed after upload.
-          replace_once('src/worker.js', '''    if (job.sourceType === 'upload' && job.sourceKey) {
-              const src = await resolveLogical(env, job.sourceKey);''', '''    if (action === 'retry') {
+          if (p === '/api/internal/fail' ''', 'complete before cleanup')
+
+          p = Path('src/worker.js')
+          text = p.read_text(encoding='utf-8')
+          needle = "    if (job.sourceType === 'upload' && job.sourceKey) {\n      const src = await resolveLogical(env, job.sourceKey);"
+          if needle not in text:
+              raise SystemExit('retry source check not found')
+          recovery = '''    if (action === 'retry') {
               const target = String(job.targetLang || 'th');
               const recoveredOutputKey = job.outputKey || `outputs/${job.id}/dub_${target}.mp4`;
               const recoveredOutput = await resolveLogical(env, recoveredOutputKey);
@@ -160,19 +130,13 @@ jobs:
               }
             }
 
-            if (job.sourceType === 'upload' && job.sourceKey) {
-              const src = await resolveLogical(env, job.sourceKey);''', 'retry output recovery')
+          ''' + needle
+          p.write_text(text.replace(needle, recovery, 1), encoding='utf-8')
+          print('patched: retry recovery')
 
-          # Public storage cleanup also uses bounded batches. The browser repeats
-          # the endpoint until remaining reaches zero.
-          replace_once('src/worker.js', '''    let freedBytes = 0;
-            let deleted = 0;
-            for (const prefix of prefixes) {
-              const result = await deletePrefix(env, prefix);
-              freedBytes += Number(result.bytes || 0);
-              deleted += Number(result.count || 0);
-            }
-            return json({ ok: true, kind, freedBytes, deleted });''', '''    let freedBytes = 0;
+          sub('src/worker.js',
+              r"    let freedBytes = 0;\n    let deleted = 0;\n    for \(const prefix of prefixes\) \{.*?\n    \}\n    return json\(\{ ok: true, kind, freedBytes, deleted \}\);",
+              '''    let freedBytes = 0;
             let deleted = 0;
             let remaining = 0;
             const perPrefix = kind === 'all' ? 4 : kind === 'temp' ? 8 : 12;
@@ -184,27 +148,34 @@ jobs:
             }
             return json({ ok: true, kind, freedBytes, deleted, remaining });''', 'batched public cleanup')
 
-          # Worker client: expose one cleanup batch per request.
-          replace_once('scripts/worker_client.py', '''    def fail(self, job_id: str, error: str) -> dict[str, Any]:
-              return self._json("POST", "/api/internal/fail", json={"jobId": job_id, "error": error[:4000]})''', '''    def cleanup_job(self, job_id: str, kind: str) -> dict[str, Any]:
+          p = Path('scripts/worker_client.py')
+          text = p.read_text(encoding='utf-8')
+          needle = '    def fail(self, job_id: str, error: str) -> dict[str, Any]:\n'
+          if needle not in text:
+              raise SystemExit('worker client fail method not found')
+          method = '''    def cleanup_job(self, job_id: str, kind: str) -> dict[str, Any]:
               if kind not in {"temp", "state"}:
                   raise ValueError("cleanup kind must be temp or state")
               return self._json("POST", "/api/internal/cleanup-job", json={"jobId": job_id, "kind": kind})
 
-            def fail(self, job_id: str, error: str) -> dict[str, Any]:
-              return self._json("POST", "/api/internal/fail", json={"jobId": job_id, "error": error[:4000]})''', 'worker client cleanup')
+          '''
+          p.write_text(text.replace(needle, method + needle, 1), encoding='utf-8')
+          print('patched: worker client cleanup')
 
-          # Fast MPEG-TS -> MP4 merge requires AAC ADTS-to-ASC conversion.
-          replace_once('scripts/finalize_job.py', '''        "-c", "copy",
-                "-avoid_negative_ts", "make_zero",''', '''        "-c", "copy",
-                "-bsf:a", "aac_adtstoasc",
-                "-avoid_negative_ts", "make_zero",''', 'AAC bitstream filter')
-
-          # Once finish() succeeds the job is already 100%. Cleanup errors are
-          # warnings only and can never turn the completed job into a failure.
-          replace_once('scripts/finalize_job.py', '''    client.patch_job(job_id, status="processing", progress=99, stage="กำลังบันทึกผลลัพธ์")
+          p = Path('scripts/finalize_job.py')
+          text = p.read_text(encoding='utf-8')
+          old = '        "-c", "copy",\n        "-avoid_negative_ts", "make_zero",'
+          new = '        "-c", "copy",\n        "-bsf:a", "aac_adtstoasc",\n        "-avoid_negative_ts", "make_zero",'
+          if old not in text:
+              raise SystemExit('AAC copy target not found')
+          text = text.replace(old, new, 1)
+          old2 = '''    client.patch_job(job_id, status="processing", progress=99, stage="กำลังบันทึกผลลัพธ์")
             client.finish(job_id, output_key, subtitle_key, offset, size_bytes)
-            print(json.dumps({''', '''    client.patch_job(job_id, status="processing", progress=99, stage="กำลังบันทึกผลลัพธ์")
+            print(json.dumps({'''
+          # Normalize indentation in the search string because the file itself is
+          # four spaces inside main().
+          old2 = old2.replace('            client.finish', '    client.finish').replace('            print', '    print')
+          new2 = '''    client.patch_job(job_id, status="processing", progress=99, stage="กำลังบันทึกผลลัพธ์")
             client.finish(job_id, output_key, subtitle_key, offset, size_bytes)
 
             if bool(job.get("autoCleanup", True)):
@@ -218,11 +189,18 @@ jobs:
                         if int(cleanup.get("remaining") or 0) <= 0:
                             break
 
-            print(json.dumps({''', 'best-effort post-completion cleanup')
+            print(json.dumps({'''
+          new2 = new2.replace('            client.finish', '    client.finish').replace('            if bool', '    if bool').replace('                for cleanup_kind', '        for cleanup_kind').replace('                    for _', '            for _').replace('                        try:', '                try:').replace('                            cleanup =', '                    cleanup =').replace('                        except Exception as cleanup_error:', '                except Exception as cleanup_error:').replace('                            print(f"Cleanup warning', '                    print(f"Cleanup warning').replace('                            break', '                    break').replace('                        if int(cleanup.get', '                if int(cleanup.get').replace('            print(json.dumps({', '    print(json.dumps({')
+          if old2 not in text:
+              raise SystemExit('finalizer finish target not found')
+          p.write_text(text.replace(old2, new2, 1), encoding='utf-8')
+          print('patched: finalizer merge and cleanup')
 
-          # Browser repeats bounded cleanup requests until the category is empty.
-          replace_once('public/app.js', '''        const result = await api(`/api/cleanup/${kind}`, { method: 'POST', body: '{}' });
-                updateLoader(`ลบแล้ว คืนพื้นที่ ${fmtBytes(result.freedBytes)}`, 100);''', '''        let totalFreed = 0;
+          p = Path('public/app.js')
+          text = p.read_text(encoding='utf-8')
+          old = '''        const result = await api(`/api/cleanup/${kind}`, { method: 'POST', body: '{}' });
+                updateLoader(`ลบแล้ว คืนพื้นที่ ${fmtBytes(result.freedBytes)}`, 100);'''.replace('                updateLoader', '        updateLoader')
+          new = '''        let totalFreed = 0;
                 let result = { remaining: 1 };
                 let round = 0;
                 while (Number(result.remaining || 0) > 0 && round < 100) {
@@ -234,13 +212,35 @@ jobs:
                   }
                 }
                 if (Number(result.remaining || 0) > 0) throw new Error('ยังลบไฟล์ไม่หมด กรุณากดลองอีกครั้ง');
-                updateLoader(`ลบแล้ว คืนพื้นที่ ${fmtBytes(totalFreed)}`, 100);''', 'repeat browser cleanup')
+                updateLoader(`ลบแล้ว คืนพื้นที่ ${fmtBytes(totalFreed)}`, 100);'''
+          lines = new.splitlines()
+          new = '\n'.join(('        ' + line.lstrip()) if i == 0 else line for i, line in enumerate(lines))
+          # Use regex here to avoid indentation drift.
+          pattern = r"        const result = await api\(`/api/cleanup/\$\{kind\}`, \{ method: 'POST', body: '\{\}' \}\);\n        updateLoader\(`ลบแล้ว คืนพื้นที่ \$\{fmtBytes\(result\.freedBytes\)\}`, 100\);"
+          replacement = '''        let totalFreed = 0;
+                let result = { remaining: 1 };
+                let round = 0;
+                while (Number(result.remaining || 0) > 0 && round < 100) {
+                  result = await api(`/api/cleanup/${kind}`, { method: 'POST', body: '{}' });
+                  totalFreed += Number(result.freedBytes || 0);
+                  round += 1;
+                  if (Number(result.remaining || 0) > 0) {
+                    updateLoader(`กำลังลบ${label} เหลือ ${result.remaining} รายการ`, Math.min(92, 35 + round * 6));
+                  }
+                }
+                if (Number(result.remaining || 0) > 0) throw new Error('ยังลบไฟล์ไม่หมด กรุณากดลองอีกครั้ง');
+                updateLoader(`ลบแล้ว คืนพื้นที่ ${fmtBytes(totalFreed)}`, 100);'''
+          replacement = '\n'.join(('        ' + x.lstrip()) if i == 0 else x for i, x in enumerate(replacement.splitlines()))
+          new_text, count = re.subn(pattern, lambda m: replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f'app cleanup target count {count}')
+          p.write_text(new_text, encoding='utf-8')
+          print('patched: browser cleanup loop')
 
-          # Keep the normal deployment smoke test aligned with the new core.
           p = Path('.github/workflows/deploy-cloudflare.yml')
           text = p.read_text(encoding='utf-8')
           if 'clean-v2.2' not in text:
-              raise SystemExit('deploy workflow core marker target not found')
+              raise SystemExit('deploy core marker not found')
           p.write_text(text.replace('clean-v2.2', 'clean-v2.3'), encoding='utf-8')
           print('patched: deployment smoke core')
           PY
