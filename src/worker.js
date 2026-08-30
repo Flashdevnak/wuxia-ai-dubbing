@@ -245,20 +245,34 @@ async function translateWithAI(env, texts, sourceLang, targetLang) {
   return results;
 }
 
+function githubHeaders(env) {
+  return {
+    accept: 'application/vnd.github+json',
+    authorization: `Bearer ${env.GITHUB_TOKEN}`,
+    'x-github-api-version': '2022-11-28',
+    'user-agent': 'wuxia-ai-dubbing-worker',
+    'content-type': 'application/json',
+  };
+}
+
 async function triggerGitHub(env, job, workerBase) {
   if (!env.GITHUB_REPO || !env.GITHUB_TOKEN) return { triggered: false, reason: 'GitHub dispatch not configured' };
   const res = await fetch(`https://api.github.com/repos/${env.GITHUB_REPO}/dispatches`, {
     method: 'POST',
-    headers: {
-      accept: 'application/vnd.github+json',
-      authorization: `Bearer ${env.GITHUB_TOKEN}`,
-      'x-github-api-version': '2022-11-28',
-      'user-agent': 'wuxia-ai-dubbing-worker',
-      'content-type': 'application/json',
-    },
+    headers: githubHeaders(env),
     body: JSON.stringify({ event_type: 'dubbing_job', client_payload: { job, workerBase } }),
   });
   return { triggered: res.ok, status: res.status, detail: res.ok ? undefined : await res.text() };
+}
+
+async function cancelGitHubRun(env, runId) {
+  const id = Number(runId || 0);
+  if (!id || !env.GITHUB_REPO || !env.GITHUB_TOKEN) return { requested: false, reason: 'run not registered' };
+  const res = await fetch(`https://api.github.com/repos/${env.GITHUB_REPO}/actions/runs/${id}/cancel`, {
+    method: 'POST',
+    headers: githubHeaders(env),
+  });
+  return { requested: res.ok, status: res.status, detail: res.ok ? undefined : (await res.text()).slice(0, 500) };
 }
 
 async function handleInternal(request, env, url) {
@@ -275,12 +289,29 @@ async function handleInternal(request, env, url) {
       const current = await readJob(env, id);
       if (!current) return json({ error: 'not found' }, 404);
       const patch = await request.json();
-      const allowed = ['status', 'stage', 'outputKey', 'subtitleKey', 'log', 'duration', 'sizeBytes', 'chunkTotal', 'error'];
-      for (const k of allowed) if (k in patch) current[k] = patch[k];
+      const paused = current.pauseRequested === true || current.status === 'paused';
+      const allowed = ['status', 'stage', 'outputKey', 'subtitleKey', 'log', 'duration', 'sizeBytes', 'chunkTotal', 'error', 'runId', 'runAttempt'];
+      for (const k of allowed) {
+        if (!(k in patch)) continue;
+        if (paused && (k === 'status' || k === 'stage') && patch[k] !== 'paused') continue;
+        current[k] = patch[k];
+      }
       if ('progress' in patch) current.progress = Math.max(cleanProgress(current.progress), cleanProgress(patch.progress));
       await writeJob(env, current);
       return json({ job: current });
     }
+  }
+
+  if (p === '/api/internal/exists' && request.method === 'GET') {
+    const key = url.searchParams.get('key');
+    if (!key) return json({ error: 'missing key' }, 400);
+    const file = await resolveLogical(env, key);
+    return json({
+      exists: Boolean(file?.id),
+      key,
+      size: Number(file?.size || 0),
+      modified: file?.modifiedTime || null,
+    });
   }
 
   if (p === '/api/internal/file' && request.method === 'GET') {
@@ -317,10 +348,15 @@ async function handleInternal(request, env, url) {
     const completed = files.filter(f => String(f.appProperties?.logicalKey || '').startsWith(`_state/${jobId}/chunks/`)).length;
     const job = await readJob(env, jobId);
     if (job) {
-      job.status = 'processing';
       const computed = Math.min(92, Math.round(28 + (completed / total) * 62));
       job.progress = Math.max(cleanProgress(job.progress), computed);
-      job.stage = completed >= total ? 'พากย์ครบแล้ว · กำลังรวมวิดีโอ' : `พากย์เสร็จ ${completed}/${total} ช่วง`;
+      if (job.pauseRequested === true || job.status === 'paused') {
+        job.status = 'paused';
+        job.stage = 'หยุดชั่วคราว';
+      } else {
+        job.status = 'processing';
+        job.stage = completed >= total ? 'พากย์ครบแล้ว กำลังรวมวิดีโอ' : `พากย์เสร็จ ${completed}/${total} ช่วง`;
+      }
       await writeJob(env, job);
     }
     return json({ ok: true, completed, total, allDone: completed >= total });
@@ -339,6 +375,7 @@ async function handleInternal(request, env, url) {
     const job = await readJob(env, body.jobId);
     if (!job) return json({ error: 'not found' }, 404);
     job.status = 'completed';
+    job.pauseRequested = false;
     job.progress = 100;
     job.stage = 'เสร็จสมบูรณ์';
     job.outputKey = body.outputKey || job.outputKey;
@@ -364,6 +401,12 @@ async function handleInternal(request, env, url) {
     const body = await request.json();
     const job = await readJob(env, body.jobId);
     if (!job) return json({ error: 'not found' }, 404);
+    if (job.pauseRequested === true || job.status === 'paused') {
+      job.status = 'paused';
+      job.stage = 'หยุดชั่วคราว';
+      await writeJob(env, job);
+      return json({ ok: true, paused: true });
+    }
     job.status = 'failed';
     job.progress = Math.max(3, cleanProgress(job.progress));
     job.stage = 'ประมวลผลไม่สำเร็จ';
@@ -391,7 +434,7 @@ async function handleApi(request, env, url) {
       ok: true,
       app: env.APP_NAME || 'Wuxia AI Dubbing',
       backend: 'google-drive',
-      core: 'clean-v2.1',
+      core: 'clean-v2.2',
       uploadMode: 'same-origin-multipart',
       publicPartSize: PUBLIC_PART_SIZE,
       driveReady,
@@ -473,6 +516,8 @@ async function handleApi(request, env, url) {
       keepMusic: body.keepMusic !== false,
       speakerSeparation: body.speakerSeparation === true,
       autoCleanup: body.autoCleanup !== false,
+      pauseRequested: false,
+      retryCount: 0,
       status: 'queued',
       progress: 3,
       stage: 'เข้าคิวประมวลผล',
@@ -482,11 +527,53 @@ async function handleApi(request, env, url) {
     const workerBase = `${url.protocol}//${url.host}`;
     const dispatch = await triggerGitHub(env, job, workerBase);
     if (!dispatch.triggered) {
-      job.stage = 'รอตั้งค่า GitHub Actions';
+      job.stage = 'ยังเริ่มประมวลผลไม่ได้';
       job.error = dispatch.detail || dispatch.reason || null;
       await writeJob(env, job);
     }
     return json({ job, dispatch }, 201);
+  }
+
+  const control = p.match(/^\/api\/jobs\/([^/]+)\/(pause|resume|retry)$/);
+  if (control && request.method === 'POST') {
+    const id = decodeURIComponent(control[1]);
+    const action = control[2];
+    const job = await readJob(env, id);
+    if (!job) return json({ error: 'ไม่พบงานนี้' }, 404);
+    if (job.status === 'completed') return json({ error: 'งานนี้เสร็จแล้ว' }, 409);
+
+    if (action === 'pause') {
+      if (job.status === 'failed') return json({ error: 'งานนี้หยุดอยู่แล้ว ให้กดลองใหม่แทน' }, 409);
+      job.pauseRequested = true;
+      job.status = 'paused';
+      job.stage = 'หยุดชั่วคราว';
+      await writeJob(env, job);
+      const cancel = await cancelGitHubRun(env, job.runId);
+      return json({ ok: true, job, cancel });
+    }
+
+    if (job.sourceType === 'upload' && job.sourceKey) {
+      const src = await resolveLogical(env, job.sourceKey);
+      if (!src) return json({ error: 'ไฟล์ต้นฉบับถูกลบแล้ว จึงทำงานต่อไม่ได้' }, 409);
+    }
+
+    job.pauseRequested = false;
+    job.status = 'queued';
+    job.error = null;
+    job.runId = null;
+    job.runAttempt = null;
+    job.retryCount = Number(job.retryCount || 0) + 1;
+    job.stage = action === 'retry' ? 'กำลังลองใหม่จากจุดล่าสุด' : 'กำลังทำต่อจากจุดล่าสุด';
+    await writeJob(env, job);
+    const workerBase = `${url.protocol}//${url.host}`;
+    const dispatch = await triggerGitHub(env, job, workerBase);
+    if (!dispatch.triggered) {
+      job.status = 'failed';
+      job.stage = 'เริ่มงานต่อไม่สำเร็จ';
+      job.error = dispatch.detail || dispatch.reason || 'ส่งงานไป GitHub Actions ไม่สำเร็จ';
+      await writeJob(env, job);
+    }
+    return json({ ok: dispatch.triggered, job, dispatch }, dispatch.triggered ? 200 : 502);
   }
 
   if (/^\/api\/jobs\/[^/]+$/.test(p)) {
