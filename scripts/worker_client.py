@@ -117,25 +117,47 @@ class WorkerClient:
         result.setdefault("size", size)
         return result
 
+    @staticmethod
+    def _read_stream_chunk(stream: BinaryIO, size: int) -> bytes:
+        """Fill a chunk even when a pipe/socket returns short reads."""
+        data = bytearray()
+        while len(data) < size:
+            piece = stream.read(size - len(data))
+            if not piece:
+                break
+            data.extend(piece)
+        return bytes(data)
+
     def upload_stream(self, stream: BinaryIO, key: str, content_type: str = "application/octet-stream") -> dict[str, Any]:
-        # Google Drive resumable uploads can start without a known total. Keep one
-        # chunk in memory so the final request can carry the real total length.
+        # Google Drive resumable uploads can start without a known total. Pipe
+        # reads (for example FFmpeg stdout) may return only a few bytes even when
+        # a much larger read was requested, so first coalesce short reads into a
+        # full Drive chunk. Keep one full chunk of look-ahead so only the real
+        # final request is allowed to be smaller than Drive's 256 KiB minimum.
         upload_id, part_size = self._start_upload(key, content_type, size=None)
+        drive_granularity = 256 * 1024
+        if part_size < drive_granularity or part_size % drive_granularity != 0:
+            raise RuntimeError(f"Invalid Google Drive part size: {part_size}")
+
         parts: list[dict[str, Any]] = []
-        total = 0
+        uploaded = 0
         part_number = 1
-        current = stream.read(part_size)
+        current = self._read_stream_chunk(stream, part_size)
+
+        if not current:
+            raise RuntimeError("Cannot upload an empty stream")
+
         while current:
-            following = stream.read(part_size)
-            total += len(current)
-            final_total = total if not following else None
+            following = self._read_stream_chunk(stream, part_size)
+            is_final = not following
+            final_total = uploaded + len(current) if is_final else None
             parts.append(self._upload_part(key, upload_id, part_number, current, final_total=final_total))
+            uploaded += len(current)
             part_number += 1
             current = following
-        if total == 0:
-            raise RuntimeError("Cannot upload an empty stream")
+
         result = self._complete_upload(key, upload_id, parts)
-        result.setdefault("size", total)
+        result.setdefault("size", uploaded)
         return result
 
     def mark_chunk_complete(self, job_id: str, index: int, total: int) -> dict[str, Any]:
