@@ -81,11 +81,16 @@ jobs:
           base = os.environ['WORKER_URL'].rstrip('/')
           access = os.environ['ACCESS_KEY']
           worker_token = os.environ['WORKER_TOKEN']
+          browser_ua = 'Mozilla/5.0 (Linux; Android 16; SM-S711B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36'
 
           def request(path, method='GET', body=None, headers=None, expect_json=True):
-              h = dict(headers or {})
-              data = body
-              req = urllib.request.Request(base + path, data=data, headers=h, method=method)
+              h = {
+                  'User-Agent': browser_ua,
+                  'Accept': '*/*',
+                  'Accept-Language': 'th-TH,th;q=0.9,en-US;q=0.8,en;q=0.7',
+              }
+              h.update(headers or {})
+              req = urllib.request.Request(base + path, data=body, headers=h, method=method)
               try:
                   with urllib.request.urlopen(req, timeout=120) as r:
                       raw = r.read()
