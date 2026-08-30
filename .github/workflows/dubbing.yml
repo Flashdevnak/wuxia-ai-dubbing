@@ -22,6 +22,7 @@ jobs:
     env:
       WORKER_URL: ${{ github.event.client_payload.workerBase || secrets.WORKER_URL }}
       WORKER_SHARED_TOKEN: ${{ secrets.WORKER_SHARED_TOKEN }}
+      YOUTUBE_COOKIES_B64: ${{ secrets.YOUTUBE_COOKIES_B64 }}
       JOB_JSON: ${{ toJson(github.event.client_payload.job) }}
     steps:
       - uses: actions/checkout@v6
@@ -153,5 +154,8 @@ jobs:
           from worker_client import WorkerClient
           job = json.loads(os.environ['JOB_JSON'])
           client = WorkerClient(os.environ['WORKER_URL'], os.environ['WORKER_SHARED_TOKEN'])
-          client.fail(job['id'], 'GitHub Actions pipeline failed. Open the workflow run log for the failed stage.')
+          current = client.get_job(job['id'])
+          # Preserve a specific error already written by prepare/dub/finalize.
+          if not current.get('error'):
+              client.fail(job['id'], 'GitHub Actions pipeline failed. Open the workflow run log for the failed stage.')
           PY
