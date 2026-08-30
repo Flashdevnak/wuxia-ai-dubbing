@@ -28,14 +28,14 @@
         <button class="nav-item" data-page="storage"><span>◆</span>พื้นที่ใช้งาน</button>
         <button class="nav-item" data-page="settings"><span>⚙</span>ตั้งค่า</button>
       </nav>
-      <div class="side-footer"><div class="rank-card"><span>ฟรีแพ็ก</span><b>สายฟรีเต็มพลัง</b><small>Cloudflare + R2 + GitHub Actions</small></div></div>
+      <div class="side-footer"><div class="rank-card"><span>ฟรีแพ็ก</span><b>สายฟรีเต็มพลัง</b><small>Google Drive + Cloudflare + GitHub Actions</small></div></div>
     </aside>
 
     <main class="main">
       <header class="topbar">
         <button id="menuBtn" class="icon-btn mobile-only" aria-label="เมนู">☰</button>
         <div class="top-spacer"></div>
-        <div class="storage-mini"><span>พื้นที่</span><b id="topStorage">0.00 GB / 10 GB</b><i><em id="topStorageBar"></em></i></div>
+        <div class="storage-mini"><span>พื้นที่</span><b id="topStorage">0.00 GB / 15 GB</b><i><em id="topStorageBar"></em></i></div>
         <span id="deployMode" class="deploy-mode" title="สถานะการเชื่อมระบบ">GitHub Preview</span>
         <button class="icon-btn" id="refreshBtn" title="รีเฟรช">↻</button>
         <div class="avatar">侠</div>
@@ -56,7 +56,7 @@
             <span class="sigil">⛓</span><div><b>วางลิงก์วิดีโอ</b><small>YouTube หรือแหล่งที่คุณมีสิทธิ์ใช้งาน</small></div><span class="shine"></span>
           </button>
           <button class="source-card gold" id="uploadCard">
-            <span class="sigil">⇧</span><div><b>อัปโหลดไฟล์</b><small>MP4 · MOV · MKV · WEBM · ไฟล์ใหญ่แบบ Resume</small></div><span class="shine"></span>
+            <span class="sigil">⇧</span><div><b>อัปโหลดไฟล์</b><small>MP4 · MOV · MKV · WEBM · ไฟล์ใหญ่แบบ Resume ไป Google Drive</small></div><span class="shine"></span>
           </button>
         </div>
 
@@ -93,17 +93,17 @@
 
         <div class="dashboard-grid">
           <div class="panel jobs-panel"><div class="panel-title"><h2>งานประมวลผลปัจจุบัน</h2><button id="seeJobs" class="text-btn">ดูทั้งหมด ›</button></div><div id="homeJobs" class="job-list empty-state">ยังไม่มีงานพากย์</div></div>
-          <div class="panel storage-panel"><div class="panel-title"><h2>พื้นที่ใช้งาน</h2></div><div class="storage-ring"><div><b id="ringGb">0.00</b><span>GB ใช้ไป</span></div></div><p><b id="ringText">0.00 GB</b> จาก 10 GB</p><div class="storage-breakdown" id="storageBreakdown"></div><button class="btn ghost full" data-go="storage">จัดการพื้นที่</button></div>
+          <div class="panel storage-panel"><div class="panel-title"><h2>พื้นที่ใช้งาน</h2></div><div class="storage-ring"><div><b id="ringGb">0.00</b><span>GB ใช้ไป</span></div></div><p><b id="ringText">0.00 GB</b> ใน Google Drive</p><div class="storage-breakdown" id="storageBreakdown"></div><button class="btn ghost full" data-go="storage">จัดการพื้นที่</button></div>
         </div>
       </section>
 
       <section class="page" data-page-panel="jobs"><div class="page-head"><h1>คัมภีร์งานพากย์</h1><p>งานทั้งหมดที่กำลังเข้าคิว ประมวลผล และเสร็จแล้ว</p></div><div class="panel"><div id="jobsList" class="job-list empty-state">ยังไม่มีงาน</div></div></section>
-      <section class="page" data-page-panel="files"><div class="page-head"><h1>ไฟล์ต้นฉบับ</h1><p>ดูขนาดไฟล์และลบเพื่อคืนพื้นที่</p></div><div class="panel"><div id="filesList" class="file-list empty-state">ยังไม่มีไฟล์</div></div></section>
+      <section class="page" data-page-panel="files"><div class="page-head"><h1>ไฟล์ต้นฉบับ</h1><p>ดูขนาดไฟล์ใน Google Drive และลบเพื่อคืนพื้นที่</p></div><div class="panel"><div id="filesList" class="file-list empty-state">ยังไม่มีไฟล์</div></div></section>
       <section class="page" data-page-panel="results"><div class="page-head"><h1>ผลลัพธ์</h1><p>วิดีโอพากย์และไฟล์ซับที่สร้างเสร็จ</p></div><div class="panel"><div id="resultsList" class="file-list empty-state">ยังไม่มีผลลัพธ์</div></div></section>
       <section class="page" data-page-panel="voices"><div class="page-head"><h1>หอเสียง</h1><p>เลือกบุคลิกเสียงสำหรับภาษาเป้าหมาย</p></div><div class="voice-grid"><button class="voice-card active">จอมยุทธ์สุขุม<small>Male · Calm</small></button><button class="voice-card">นางเอกนุ่มลึก<small>Female · Warm</small></button><button class="voice-card">ผู้บรรยายเข้ม<small>Narrator · Deep</small></button><button class="voice-card">หลายตัวละคร<small>Auto Speaker Match</small></button></div></section>
       <section class="page" data-page-panel="translate"><div class="page-head"><h1>ภาษาที่รองรับ</h1><p>ระบบถอดเสียง/แปล/พากย์หลายภาษา</p></div><div id="languageCloud" class="language-cloud"></div></section>
-      <section class="page" data-page-panel="storage"><div class="page-head"><h1>คลังยุทธภพ</h1><p>บริหารพื้นที่ R2 และกวาดไฟล์ชั่วคราว</p></div><div class="storage-cards"><div class="panel stat"><span>ใช้ทั้งหมด</span><b id="stTotal">0 GB</b></div><div class="panel stat"><span>ต้นฉบับ</span><b id="stUpload">0 GB</b></div><div class="panel stat"><span>ชั่วคราว</span><b id="stTemp">0 GB</b></div><div class="panel stat"><span>ผลลัพธ์</span><b id="stOutput">0 GB</b></div></div><div class="panel storage-actions"><button id="cleanupBtn" class="btn danger">ล้างไฟล์ชั่วคราว</button><small>ลบเฉพาะไฟล์ใน temp/ ไม่แตะต้นฉบับและผลลัพธ์</small></div></section>
-      <section class="page" data-page-panel="settings"><div class="page-head"><h1>ตั้งค่า</h1><p>การทำงานพื้นฐานของระบบ</p></div><div class="panel settings-panel"><label>จำนวนชิ้นที่อัปโหลดพร้อมกัน<select id="parallelUpload"><option>1</option><option selected>2</option><option>3</option></select></label><label>ธีม<select><option selected>ยุทธภพรัตติกาล</option></select></label><p class="hint">ระบบจริงใช้ Cloudflare R2 สำหรับไฟล์ และสามารถต่อ GitHub Actions สำหรับงาน AI/FFmpeg ได้</p></div></section>
+      <section class="page" data-page-panel="storage"><div class="page-head"><h1>คลังยุทธภพ</h1><p>บริหารพื้นที่ Google Drive และกวาดไฟล์ชั่วคราว</p></div><div class="storage-cards"><div class="panel stat"><span>ใช้ทั้งหมด</span><b id="stTotal">0 GB</b></div><div class="panel stat"><span>ต้นฉบับ</span><b id="stUpload">0 GB</b></div><div class="panel stat"><span>ชั่วคราว</span><b id="stTemp">0 GB</b></div><div class="panel stat"><span>ผลลัพธ์</span><b id="stOutput">0 GB</b></div></div><div class="panel storage-actions"><button id="cleanupBtn" class="btn danger">ล้างไฟล์ชั่วคราว</button><small>ลบเฉพาะไฟล์ชั่วคราวของแอปใน Google Drive ไม่แตะต้นฉบับและผลลัพธ์</small></div></section>
+      <section class="page" data-page-panel="settings"><div class="page-head"><h1>ตั้งค่า</h1><p>การทำงานพื้นฐานของระบบ</p></div><div class="panel settings-panel"><label>จำนวนชิ้นที่อัปโหลดพร้อมกัน<select id="parallelUpload"><option>1</option><option selected>2</option><option>3</option></select></label><label>ธีม<select><option selected>ยุทธภพรัตติกาล</option></select></label><p class="hint">ไฟล์เก็บใน Google Drive, Cloudflare Worker ดูแล API/Workers AI และ GitHub Actions ทำ Whisper/TTS/FFmpeg</p></div></section>
     </main>
   </div>
 
