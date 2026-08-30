@@ -28,11 +28,12 @@ const esc = s => String(s ?? '').replace(/[&<>\"]/g, c => ({ '&': '&amp;', '<': 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const extOf = name => String(name || '').split('.').pop()?.toLowerCase() || '';
 const extLabel = name => extOf(name) ? `.${extOf(name).toUpperCase()}` : 'ไม่ทราบชนิด';
+const langLabel = code => LANGS.find(x => x[0] === code)?.[1] || String(code || 'ไม่ทราบภาษา');
 
 function getAccessKey() {
   if (accessKey) return accessKey;
-  const key = window.prompt('กรอกรหัสสำนักเพื่อเข้าใช้งานระบบ');
-  if (!key) throw new Error('ต้องใส่รหัสสำนักก่อนใช้งาน');
+  const key = window.prompt('กรอกรหัสเข้าใช้งาน');
+  if (!key) throw new Error('กรุณาใส่รหัสเข้าใช้งานก่อน');
   accessKey = key.trim();
   sessionStorage.setItem(ACCESS_KEY_SESSION, accessKey);
   return accessKey;
@@ -64,7 +65,8 @@ function fillLangs() {
     src.add(new Option(label, value));
     if (value !== 'auto') tgt.add(new Option(label, value));
   }
-  src.value = 'auto'; tgt.value = 'th';
+  src.value = 'auto';
+  tgt.value = 'th';
   const cloud = $('#languageCloud');
   if (cloud) cloud.innerHTML = LANGS.filter(x => x[0] !== 'auto').map(x => `<span class="lang-pill">${esc(x[1])}</span>`).join('');
 }
@@ -86,18 +88,18 @@ function setMode(mode) {
   $('#linkCard')?.classList.toggle('selected', mode === 'link');
   $('#uploadCard')?.classList.toggle('selected', mode === 'upload');
   const m = $('#message');
-  if (m) m.textContent = mode === 'link' ? 'โหมดลิงก์พร้อมแล้ว' : 'โหมดไฟล์พร้อมแล้ว · แนะนำเลือกผ่าน My Files / Explorer';
+  if (m) m.textContent = mode === 'link' ? 'พร้อมรับลิงก์วิดีโอ' : 'เลือกไฟล์จากเครื่องเพื่ออัปโหลด';
 }
 
 async function api(path, opts = {}) {
-  if (IS_GITHUB_PAGES && !window.WUXIA_API_BASE) throw new Error('GitHub Pages เป็นหน้า Preview — ใช้ URL Cloudflare Worker สำหรับระบบจริง');
+  if (IS_GITHUB_PAGES && !window.WUXIA_API_BASE) throw new Error('หน้านี้เป็นตัวอย่าง กรุณาเปิดหน้า Cloudflare Worker เพื่อใช้งานจริง');
   const key = getAccessKey();
   const headers = { ...(opts.headers || {}), 'x-access-key': key };
   if (opts.body && !(opts.body instanceof FormData) && !(opts.body instanceof Blob) && !headers['content-type']) headers['content-type'] = 'application/json';
   const r = await fetch(API_BASE + path, { ...opts, headers, cache: 'no-store' });
   const data = await r.json().catch(() => ({}));
-  if (r.status === 401) { clearAccessKey(); throw new Error(data.error || 'รหัสสำนักไม่ถูกต้อง'); }
-  if (!r.ok) throw new Error(data.error || data.detail || `HTTP ${r.status}`);
+  if (r.status === 401) { clearAccessKey(); throw new Error(data.error || 'รหัสเข้าใช้งานไม่ถูกต้อง'); }
+  if (!r.ok) throw new Error(data.error || data.detail || `เกิดข้อผิดพลาด ${r.status}`);
   return data;
 }
 
@@ -129,7 +131,7 @@ function showFileMeta(file) {
   const box = $('#fileMeta');
   if (!box) return;
   box.classList.remove('hidden');
-  box.innerHTML = `<div><span>ชื่อไฟล์</span><b>${esc(file.name)}</b></div><div><span>นามสกุล</span><b>${esc(extLabel(file.name))}</b></div><div><span>ขนาด</span><b>${fmtBytes(file.size)}</b></div>`;
+  box.innerHTML = `<div><span>ชื่อไฟล์</span><b>${esc(file.name)}</b></div><div><span>ชนิดไฟล์</span><b>${esc(extLabel(file.name))}</b></div><div><span>ขนาด</span><b>${fmtBytes(file.size)}</b></div>`;
 }
 
 function xhrMultipartChunk({ key, uploadId, partNumber, chunk, file, overallStart }) {
@@ -150,18 +152,18 @@ function xhrMultipartChunk({ key, uploadId, partNumber, chunk, file, overallStar
       const pct = file.size ? sent / file.size * 100 : 0;
       $('#uploadPct').textContent = Math.floor(pct) + '%';
       $('#uploadBar').style.width = pct + '%';
-      $('#uploadStatus').textContent = `กำลังส่งไฟล์ · ${fmtBytes(sent)} / ${fmtBytes(file.size)}`;
+      $('#uploadStatus').textContent = `กำลังส่งไฟล์ ${fmtBytes(sent)} จาก ${fmtBytes(file.size)}`;
     };
     xhr.onload = () => {
       let data = {};
       try { data = xhr.responseText ? JSON.parse(xhr.responseText) : {}; } catch {}
-      if (xhr.status === 401) { clearAccessKey(); reject(new Error(data.error || 'รหัสสำนักไม่ถูกต้อง')); return; }
+      if (xhr.status === 401) { clearAccessKey(); reject(new Error(data.error || 'รหัสเข้าใช้งานไม่ถูกต้อง')); return; }
       if (xhr.status >= 200 && xhr.status < 300) { resolve(data); return; }
-      reject(new Error(data.error || data.detail || `HTTP ${xhr.status}`));
+      reject(new Error(data.error || data.detail || `เกิดข้อผิดพลาด ${xhr.status}`));
     };
-    xhr.onerror = () => reject(new Error('ส่งไฟล์ไม่สำเร็จ กรุณาเลือกผ่าน Files / My Files / Explorer'));
-    xhr.ontimeout = () => reject(new Error('ส่งช่วงนี้เกิน 180 วินาที'));
-    xhr.onabort = () => reject(new Error('การอัปโหลดถูกยกเลิก'));
+    xhr.onerror = () => reject(new Error('ส่งไฟล์ไม่สำเร็จ กรุณาตรวจสอบอินเทอร์เน็ตแล้วลองอีกครั้ง'));
+    xhr.ontimeout = () => reject(new Error('ส่งไฟล์ส่วนนี้นานเกินไป กรุณาลองอีกครั้ง'));
+    xhr.onabort = () => reject(new Error('ยกเลิกการอัปโหลดแล้ว'));
     xhr.send(form);
   });
 }
@@ -184,27 +186,28 @@ async function beginOrResumeUpload(file) {
 
 async function uploadFile(file) {
   const ext = extOf(file.name);
-  if (!SUPPORTED_EXTS.has(ext)) throw new Error(`ไม่รองรับ ${ext ? '.' + ext.toUpperCase() : 'ไฟล์นี้'} · ใช้ MP4, MOV, MKV, WEBM, AVI หรือ M4V`);
+  if (!SUPPORTED_EXTS.has(ext)) throw new Error(`ไม่รองรับ ${ext ? '.' + ext.toUpperCase() : 'ไฟล์นี้'} ใช้ MP4, MOV, MKV, WEBM, AVI หรือ M4V`);
   showFileMeta(file);
   $('#uploadProgress').classList.remove('hidden');
-  $('#uploadName').textContent = `${file.name} · ${extLabel(file.name)}`;
-  $('#uploadPct').textContent = '0%'; $('#uploadBar').style.width = '0%';
-  $('#uploadStatus').textContent = 'กำลังเปิด session อัปโหลด...';
+  $('#uploadName').textContent = `${file.name} (${extLabel(file.name)})`;
+  $('#uploadPct').textContent = '0%';
+  $('#uploadBar').style.width = '0%';
+  $('#uploadStatus').textContent = 'กำลังเตรียมการอัปโหลด';
 
   let upload;
   try { upload = await beginOrResumeUpload(file); }
   catch (e) { throw new Error(`เริ่มอัปโหลดไม่สำเร็จ: ${e.message}`); }
 
   const { key, uploadId, partSize } = upload;
-  if (!partSize || partSize % (256 * 1024) !== 0) throw new Error('ขนาด chunk จากเซิร์ฟเวอร์ไม่ถูกต้อง');
+  if (!partSize || partSize % (256 * 1024) !== 0) throw new Error('ขนาดส่วนอัปโหลดจากเซิร์ฟเวอร์ไม่ถูกต้อง');
   let nextOffset = Math.min(file.size, Number(upload.nextOffset || 0));
   if (nextOffset && nextOffset % partSize !== 0 && nextOffset !== file.size) {
     await api('/api/uploads/abort', { method: 'POST', body: JSON.stringify({ key, uploadId }) }).catch(() => {});
     clearResume(file);
-    throw new Error('ตำแหน่ง Resume ไม่ตรง กรุณาเลือกไฟล์ใหม่อีกครั้ง');
+    throw new Error('ตำแหน่งอัปโหลดเดิมไม่ตรง กรุณาเลือกไฟล์ใหม่อีกครั้ง');
   }
   if (nextOffset > 0 && nextOffset < file.size) {
-    $('#uploadStatus').textContent = `Resume จาก ${fmtBytes(nextOffset)} / ${fmtBytes(file.size)}`;
+    $('#uploadStatus').textContent = `ทำต่อจาก ${fmtBytes(nextOffset)} จาก ${fmtBytes(file.size)}`;
     $('#uploadPct').textContent = Math.floor(nextOffset / file.size * 100) + '%';
     $('#uploadBar').style.width = nextOffset / file.size * 100 + '%';
   }
@@ -219,7 +222,7 @@ async function uploadFile(file) {
     let lastError = null;
     let confirmed = null;
     for (let attempt = 1; attempt <= 5; attempt++) {
-      $('#uploadStatus').textContent = `กำลังส่งส่วน ${partNumber}/${totalParts}${attempt > 1 ? ` · ลองใหม่ ${attempt}/5` : ''}`;
+      $('#uploadStatus').textContent = `กำลังส่งส่วน ${partNumber}/${totalParts}${attempt > 1 ? ` ลองใหม่ครั้งที่ ${attempt}` : ''}`;
       try {
         confirmed = await xhrMultipartChunk({ key, uploadId, partNumber, chunk, file, overallStart: start });
         break;
@@ -233,21 +236,24 @@ async function uploadFile(file) {
         if (attempt < 5) await sleep(700 * attempt);
       }
     }
-    if (!confirmed) throw new Error(`ส่วน ${partNumber}/${totalParts} ไม่สำเร็จ: ${lastError?.message || 'network error'}`);
-    nextOffset = end; partIndex++;
+    if (!confirmed) throw new Error(`ส่งส่วน ${partNumber}/${totalParts} ไม่สำเร็จ: ${lastError?.message || 'การเชื่อมต่อมีปัญหา'}`);
+    nextOffset = end;
+    partIndex++;
     saveResume(file, { key, uploadId, partSize, nextOffset });
     const pct = nextOffset / file.size * 100;
-    $('#uploadPct').textContent = Math.floor(pct) + '%'; $('#uploadBar').style.width = pct + '%';
-    $('#uploadStatus').textContent = `Google Drive รับแล้ว ${fmtBytes(nextOffset)} / ${fmtBytes(file.size)} · ${partIndex}/${totalParts}`;
+    $('#uploadPct').textContent = Math.floor(pct) + '%';
+    $('#uploadBar').style.width = pct + '%';
+    $('#uploadStatus').textContent = `ส่งแล้ว ${fmtBytes(nextOffset)} จาก ${fmtBytes(file.size)} (${partIndex}/${totalParts})`;
   }
 
-  $('#uploadStatus').textContent = 'ส่งครบแล้ว · กำลังตรวจขนาดไฟล์';
+  $('#uploadStatus').textContent = 'ส่งครบแล้ว กำลังตรวจไฟล์';
   const done = await api('/api/uploads/complete', { method: 'POST', body: JSON.stringify({ key, uploadId }) });
-  if (Number(done.size) !== Number(file.size)) throw new Error(`ขนาดไฟล์บน Drive ไม่ตรง: ${done.size}/${file.size} bytes`);
+  if (Number(done.size) !== Number(file.size)) throw new Error(`ขนาดไฟล์บน Google Drive ไม่ตรง ${done.size}/${file.size} bytes`);
   clearResume(file);
   state.sourceKey = key;
-  $('#uploadPct').textContent = '100%'; $('#uploadBar').style.width = '100%';
-  $('#uploadStatus').textContent = `อัปโหลดเสร็จแล้ว · ${extLabel(file.name)} · พร้อมสร้างงานพากย์`;
+  $('#uploadPct').textContent = '100%';
+  $('#uploadBar').style.width = '100%';
+  $('#uploadStatus').textContent = `อัปโหลดเสร็จแล้ว ${extLabel(file.name)} พร้อมเริ่มพากย์`;
   await loadStorage();
   return key;
 }
@@ -255,9 +261,9 @@ async function uploadFile(file) {
 function updateSpeedNote() {
   const mode = $('#processingMode')?.value || 'fast';
   const map = {
-    fast: ['โหมดเร็ว', 'แบ่งคลิป ~5 นาที · รันพร้อมกันสูงสุด 4 ช่วง · Whisper Base · FFmpeg Ultrafast'],
-    balanced: ['โหมดสมดุล', 'แบ่งคลิป ~7 นาที · Whisper Small · เน้นความแม่นขึ้น'],
-    quality: ['โหมดคุณภาพสูง', 'แบ่งคลิป ~10 นาที · Whisper Small + beam สูงขึ้น · ใช้เวลานานกว่า'],
+    fast: ['โหมดเร็ว', 'แบ่งวิดีโอช่วงละประมาณ 5 นาที และทำพร้อมกันได้สูงสุด 4 ช่วง'],
+    balanced: ['โหมดสมดุล', 'แบ่งวิดีโอช่วงละประมาณ 7 นาที ใช้เวลามากขึ้นเพื่อเพิ่มความแม่นยำ'],
+    quality: ['โหมดคุณภาพสูง', 'แบ่งวิดีโอช่วงละประมาณ 10 นาที เน้นความแม่นยำและใช้เวลามากที่สุด'],
   };
   const [title, text] = map[mode];
   if ($('#speedNote')) $('#speedNote').innerHTML = `<b>${title}</b><span>${text}</span>`;
@@ -281,18 +287,34 @@ async function createJob() {
   if (payload.sourceType === 'link' && !payload.sourceUrl) throw new Error('กรุณาวางลิงก์ก่อน');
   if (payload.sourceType === 'upload' && !payload.sourceKey) throw new Error('กรุณาอัปโหลดไฟล์ให้เสร็จก่อน');
 
-  showLoader('กำลังเปิดคัมภีร์งานพากย์', 'กำลังส่งงานเข้าคิว', 2);
+  showLoader('กำลังสร้างงานพากย์', 'กำลังส่งงานเข้าคิว', 2);
   const data = await api('/api/jobs', { method: 'POST', body: JSON.stringify(payload) });
-  updateLoader(data.dispatch?.triggered ? 'ส่งงานเข้า Fast Pipeline แล้ว' : 'สร้างงานแล้ว แต่ dispatch ยังไม่พร้อม', 3);
+  updateLoader(data.dispatch?.triggered ? 'เริ่มประมวลผลแล้ว' : 'สร้างงานแล้ว แต่ยังเริ่มประมวลผลไม่ได้', 3);
   setTimeout(hideLoader, 420);
-  $('#message').textContent = data.dispatch?.triggered ? '✓ เริ่มประมวลผลแล้ว · ระบบจะแสดงขั้นตอนแบบสด' : 'สร้างงานแล้ว แต่ backend ยัง dispatch ไม่ได้';
+  $('#message').textContent = data.dispatch?.triggered ? '✓ เริ่มประมวลผลแล้ว สามารถดูความคืบหน้าได้ด้านล่าง' : 'สร้างงานแล้ว แต่ระบบประมวลผลยังไม่พร้อม';
   await Promise.all([loadJobs(), loadStorage()]);
+}
+
+async function controlJob(id, action) {
+  const text = action === 'pause' ? 'กำลังหยุดงาน' : action === 'resume' ? 'กำลังทำงานต่อ' : 'กำลังลองใหม่';
+  if ($('#message')) $('#message').textContent = text;
+  const data = await api(`/api/jobs/${encodeURIComponent(id)}/${action}`, { method: 'POST', body: '{}' });
+  if ($('#message')) {
+    $('#message').textContent = action === 'pause'
+      ? '⏸ สั่งหยุดชั่วคราวแล้ว ระบบจะหยุดที่จุดที่ปลอดภัย'
+      : action === 'resume'
+        ? '▶ เริ่มทำต่อจากช่วงที่ทำไว้แล้ว'
+        : '↻ เริ่มลองใหม่จากช่วงที่ทำไว้แล้ว';
+  }
+  await loadJobs();
+  return data;
 }
 
 function friendlyError(error) {
   const raw = String(error || '');
   if (!raw) return '';
-  if (raw.includes('GitHub Actions pipeline failed')) return 'ขั้นประมวลผลเสียงพากย์ไม่สำเร็จ';
+  if (raw.includes('GitHub Actions pipeline failed')) return 'ประมวลผลไม่สำเร็จ สามารถกดลองใหม่ได้';
+  if (raw.includes('Google Drive upload failed')) return 'บันทึกไฟล์ลง Google Drive ไม่สำเร็จ สามารถกดลองใหม่ได้';
   if (raw.length > 360) return raw.slice(0, 350) + '…';
   return raw;
 }
@@ -302,13 +324,20 @@ function jobHtml(j) {
   const floor = Number(state.progressFloor[j.id] || 0);
   const p = Math.max(raw, floor);
   state.progressFloor[j.id] = p;
-  const statusText = j.status === 'completed' ? 'เสร็จสมบูรณ์' : (j.stage || j.status || 'เข้าคิว');
+  const statusText = j.status === 'completed' ? 'เสร็จสมบูรณ์' : j.status === 'paused' ? 'หยุดชั่วคราว' : (j.stage || j.status || 'เข้าคิว');
   const statusClass = j.status === 'failed' ? 'failed' : j.status === 'completed' ? 'completed' : 'processing';
   const err = friendlyError(j.error);
   const mode = j.processingMode === 'quality' ? 'คุณภาพสูง' : j.processingMode === 'balanced' ? 'สมดุล' : 'เร็ว';
+  const control = j.status === 'failed'
+    ? `<button class="mini-btn" data-job-action="retry" data-job-id="${esc(j.id)}">↻ ลองใหม่</button>`
+    : j.status === 'paused'
+      ? `<button class="mini-btn" data-job-action="resume" data-job-id="${esc(j.id)}">▶ ทำต่อ</button>`
+      : (j.status === 'queued' || j.status === 'processing')
+        ? `<button class="mini-btn" data-job-action="pause" data-job-id="${esc(j.id)}">⏸ หยุดชั่วคราว</button>`
+        : '';
   return `<article class="job-card ${statusClass}">
-    <div class="job-top"><div class="job-copy"><div class="job-title">${esc(j.title)}</div><div class="job-meta">${esc(j.sourceLang)} → ${esc(j.targetLang)} · โหมด${mode}</div><div class="job-stage"><span></span>${esc(statusText)}</div>${err ? `<div class="job-error">${esc(err)}</div>` : ''}</div>
-    <div class="job-actions">${j.outputKey ? `<button class="mini-btn" data-file="${esc(j.outputKey)}">ดาวน์โหลด MP4</button>` : ''}${j.subtitleKey ? `<button class="mini-btn" data-file="${esc(j.subtitleKey)}">SRT</button>` : ''}<button class="mini-btn danger" data-delete-job="${esc(j.id)}">ลบ</button></div></div>
+    <div class="job-top"><div class="job-copy"><div class="job-title">${esc(j.title)}</div><div class="job-meta">ต้นฉบับ ${esc(langLabel(j.sourceLang))} พากย์เป็น ${esc(langLabel(j.targetLang))} โหมด${mode}</div><div class="job-stage"><span></span>${esc(statusText)}</div>${err ? `<div class="job-error">${esc(err)}</div>` : ''}</div>
+    <div class="job-actions">${control}${j.outputKey ? `<button class="mini-btn" data-file="${esc(j.outputKey)}">ดาวน์โหลด MP4</button>` : ''}${j.subtitleKey ? `<button class="mini-btn" data-file="${esc(j.subtitleKey)}">คำบรรยาย</button>` : ''}<button class="mini-btn danger" data-delete-job="${esc(j.id)}">ลบ</button></div></div>
     <div class="sword-progress job-sword"><i><em style="width:${p}%"></em></i><span class="sword-hilt">◆</span></div>
     <div class="job-foot"><b>${p}%</b><span>อัปเดต ${new Date(j.updatedAt || j.createdAt).toLocaleString('th-TH')}</span></div>
   </article>`;
@@ -323,29 +352,37 @@ async function loadJobs() {
     if ($('#jobsList')) $('#jobsList').innerHTML = html;
     $('#homeJobs')?.classList.toggle('empty-state', !state.jobs.length);
     if ($('#homeJobs')) $('#homeJobs').innerHTML = state.jobs.length ? state.jobs.slice(0, 3).map(jobHtml).join('') : 'ยังไม่มีงานพากย์';
-  } catch (e) { if ($('#homeJobs')) $('#homeJobs').textContent = e.message || 'ยังเชื่อม API ไม่ได้'; }
+  } catch (e) {
+    if ($('#homeJobs')) $('#homeJobs').textContent = e.message || 'เชื่อมต่อระบบไม่ได้';
+  }
 }
 
 function fileRow(f) {
   const name = f.key.split('/').pop();
-  return `<div class="file-row"><div><b>${esc(name)}</b><div class="file-meta">${esc(extLabel(name))} · ${fmtBytes(f.size)} · ${new Date(f.uploaded).toLocaleString('th-TH')}</div></div><div class="file-actions">${f.key.startsWith('outputs/') ? `<button class="mini-btn" data-file="${esc(f.key)}">ดาวน์โหลด</button>` : ''}<button class="mini-btn danger" data-delete-file="${esc(f.key)}">ลบ</button></div></div>`;
+  const when = new Date(f.uploaded).toLocaleString('th-TH');
+  return `<div class="file-row"><div><b>${esc(name)}</b><div class="file-meta">ชนิด ${esc(extLabel(name))} ขนาด ${fmtBytes(f.size)} อัปโหลด ${when}</div></div><div class="file-actions">${f.key.startsWith('outputs/') ? `<button class="mini-btn" data-file="${esc(f.key)}">ดาวน์โหลด</button>` : ''}<button class="mini-btn danger" data-delete-file="${esc(f.key)}">ลบ</button></div></div>`;
 }
 
 async function loadFiles() {
   try {
-    const d = await api('/api/files'); state.files = d.files || [];
+    const d = await api('/api/files');
+    state.files = d.files || [];
     const src = state.files.filter(f => f.key.startsWith('uploads/'));
     const out = state.files.filter(f => f.key.startsWith('outputs/'));
     const mk = list => list.length ? list.map(fileRow).join('') : 'ยังไม่มีไฟล์';
-    $('#filesList')?.classList.toggle('empty-state', !src.length); if ($('#filesList')) $('#filesList').innerHTML = mk(src);
-    $('#resultsList')?.classList.toggle('empty-state', !out.length); if ($('#resultsList')) $('#resultsList').innerHTML = mk(out);
+    $('#filesList')?.classList.toggle('empty-state', !src.length);
+    if ($('#filesList')) $('#filesList').innerHTML = mk(src);
+    $('#resultsList')?.classList.toggle('empty-state', !out.length);
+    if ($('#resultsList')) $('#resultsList').innerHTML = mk(out);
   } catch (e) { console.warn(e); }
 }
 
 async function loadStorage() {
   try {
-    const d = await api('/api/storage'); state.storage = d;
-    const gb = d.bytes / 1024 ** 3; const limit = d.limitBytes / 1024 ** 3;
+    const d = await api('/api/storage');
+    state.storage = d;
+    const gb = d.bytes / 1024 ** 3;
+    const limit = d.limitBytes / 1024 ** 3;
     const pct = Math.min(100, d.limitBytes ? d.bytes / d.limitBytes * 100 : 0);
     if ($('#topStorage')) $('#topStorage').textContent = `${gb.toFixed(2)} GB / ${limit.toFixed(0)} GB`;
     if ($('#topStorageBar')) $('#topStorageBar').style.width = pct + '%';
@@ -377,38 +414,76 @@ function bind() {
 
   $('#analyzeLinkBtn')?.addEventListener('click', () => {
     const v = $('#videoUrl')?.value.trim();
-    try { const u = new URL(v); if (!['http:', 'https:'].includes(u.protocol)) throw new Error('bad protocol'); $('#message').textContent = '✓ ลิงก์ถูกต้อง พร้อมสร้างงาน'; }
-    catch { $('#message').textContent = 'กรุณาตรวจสอบลิงก์อีกครั้ง'; }
+    try {
+      const u = new URL(v);
+      if (!['http:', 'https:'].includes(u.protocol)) throw new Error('bad protocol');
+      $('#message').textContent = '✓ ลิงก์ใช้ได้ พร้อมเริ่มงาน';
+    } catch {
+      $('#message').textContent = 'กรุณาตรวจสอบลิงก์อีกครั้ง';
+    }
   });
 
   $('#fileInput')?.addEventListener('change', async e => {
-    const f = e.target.files?.[0]; if (!f) return;
+    const f = e.target.files?.[0];
+    if (!f) return;
     try {
       state.sourceKey = null;
       showFileMeta(f);
-      showLoader('กำลังเตรียมไฟล์', `${f.name} · ${extLabel(f.name)} · ${fmtBytes(f.size)}`, 1);
+      showLoader('กำลังเตรียมไฟล์', `${f.name} ${extLabel(f.name)} ${fmtBytes(f.size)}`, 1);
       hideLoader();
       await uploadFile(f);
-    } catch (err) { $('#uploadStatus').textContent = 'อัปโหลดไม่สำเร็จ: ' + err.message; }
+    } catch (err) {
+      $('#uploadStatus').textContent = 'อัปโหลดไม่สำเร็จ: ' + err.message;
+    }
   });
 
-  $('#startBtn')?.addEventListener('click', async () => { try { await createJob(); } catch (e) { hideLoader(); $('#message').textContent = e.message; } });
+  $('#startBtn')?.addEventListener('click', async () => {
+    try { await createJob(); }
+    catch (e) { hideLoader(); $('#message').textContent = e.message; }
+  });
   $('#refreshBtn')?.addEventListener('click', () => Promise.all([loadJobs(), loadFiles(), loadStorage()]));
   $('#cleanupBtn')?.addEventListener('click', async () => {
-    showLoader('กำลังกวาดลานยุทธภพ', 'ลบไฟล์ชั่วคราว', 35);
-    try { await api('/api/cleanup/temp', { method: 'POST', body: '{}' }); updateLoader('ล้างไฟล์ชั่วคราวแล้ว', 100); await loadStorage(); }
-    finally { setTimeout(hideLoader, 420); }
+    showLoader('กำลังล้างไฟล์ชั่วคราว', 'กำลังคืนพื้นที่', 35);
+    try {
+      await api('/api/cleanup/temp', { method: 'POST', body: '{}' });
+      updateLoader('ล้างไฟล์ชั่วคราวแล้ว', 100);
+      await loadStorage();
+    } finally { setTimeout(hideLoader, 420); }
   });
 
   document.body.addEventListener('click', async e => {
-    const dl = e.target.closest('[data-file]'); if (dl) { downloadFile(dl.dataset.file); return; }
+    const dl = e.target.closest('[data-file]');
+    if (dl) { downloadFile(dl.dataset.file); return; }
+
+    const control = e.target.closest('[data-job-action]');
+    if (control) {
+      try { await controlJob(control.dataset.jobId, control.dataset.jobAction); }
+      catch (err) {
+        if ($('#message')) $('#message').textContent = err.message;
+        else window.alert(err.message);
+      }
+      return;
+    }
+
     const jb = e.target.closest('[data-delete-job]');
-    if (jb && confirm('ลบงานนี้และไฟล์ที่เกี่ยวข้องหรือไม่?')) { await api('/api/jobs/' + jb.dataset.deleteJob, { method: 'DELETE' }); delete state.progressFloor[jb.dataset.deleteJob]; await Promise.all([loadJobs(), loadFiles(), loadStorage()]); }
+    if (jb && confirm('ลบงานนี้และไฟล์ที่เกี่ยวข้องหรือไม่?')) {
+      await api('/api/jobs/' + jb.dataset.deleteJob, { method: 'DELETE' });
+      delete state.progressFloor[jb.dataset.deleteJob];
+      await Promise.all([loadJobs(), loadFiles(), loadStorage()]);
+      return;
+    }
+
     const fb = e.target.closest('[data-delete-file]');
-    if (fb && confirm('ลบไฟล์นี้เพื่อคืนพื้นที่หรือไม่?')) { await api('/api/files?key=' + encodeURIComponent(fb.dataset.deleteFile), { method: 'DELETE' }); await Promise.all([loadFiles(), loadStorage()]); }
+    if (fb && confirm('ลบไฟล์นี้เพื่อคืนพื้นที่หรือไม่?')) {
+      await api('/api/files?key=' + encodeURIComponent(fb.dataset.deleteFile), { method: 'DELETE' });
+      await Promise.all([loadFiles(), loadStorage()]);
+    }
   });
 
-  $$('.voice-card').forEach(c => c.addEventListener('click', () => { $$('.voice-card').forEach(x => x.classList.remove('active')); c.classList.add('active'); }));
+  $$('.voice-card').forEach(c => c.addEventListener('click', () => {
+    $$('.voice-card').forEach(x => x.classList.remove('active'));
+    c.classList.add('active');
+  }));
 }
 
 initSparks();
@@ -418,12 +493,12 @@ updateSpeedNote();
 setMode('link');
 
 if (IS_GITHUB_PAGES && !window.WUXIA_API_BASE) {
-  if ($('#deployMode')) $('#deployMode').textContent = 'GitHub Preview';
-  if ($('#message')) $('#message').textContent = 'หน้า Preview เท่านั้น · ใช้ Cloudflare Worker สำหรับระบบจริง';
-  if ($('#topStorage')) $('#topStorage').textContent = 'Preview';
-  if ($('#homeJobs')) $('#homeJobs').textContent = 'Preview UI พร้อม';
+  if ($('#deployMode')) $('#deployMode').textContent = 'หน้าตัวอย่าง';
+  if ($('#message')) $('#message').textContent = 'หน้านี้ใช้ดูตัวอย่าง กรุณาเปิด Cloudflare Worker เพื่อใช้งานจริง';
+  if ($('#topStorage')) $('#topStorage').textContent = 'ตัวอย่าง';
+  if ($('#homeJobs')) $('#homeJobs').textContent = 'หน้าตัวอย่างพร้อมใช้งาน';
 } else {
-  if ($('#deployMode')) $('#deployMode').textContent = 'FIRE CORE 2.1';
+  if ($('#deployMode')) $('#deployMode').textContent = 'พร้อมใช้งาน';
   Promise.all([loadJobs(), loadFiles(), loadStorage()]);
   setInterval(() => { if (!document.hidden) loadJobs(); }, 6000);
 }
