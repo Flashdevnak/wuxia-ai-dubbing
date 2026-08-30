@@ -35,3 +35,7 @@ jobs:
           test -f requirements.txt
           test -f .github/workflows/dubbing.yml
           test -f .github/workflows/deploy-cloudflare.yml
+      - name: Cloudflare Worker bundle dry-run
+        run: |
+          npm install
+          npx wrangler deploy --dry-run --outdir .wrangler-dry
