@@ -28,6 +28,13 @@ LOCALES = {
 
 GOOGLE_CODES = {"zh": "zh-CN"}
 
+# Audio profile v2 keeps translated speech natural instead of forcing every
+# sentence into the exact Whisper segment length. Old checkpoints are rebuilt
+# when a retry uses this newer timing/mix profile.
+AUDIO_PROFILE_VERSION = 2
+MAX_TEMPO_RATIO = 1.10
+MAX_GAP_EXTENSION = 1.20
+
 
 def run(cmd: list[str]) -> None:
     subprocess.run(cmd, check=True)
@@ -90,7 +97,7 @@ async def synthesize(text: str, voice: str, destination: Path) -> None:
     last: Exception | None = None
     for attempt in range(1, 4):
         try:
-            communicate = edge_tts.Communicate(text=text, voice=voice, rate="+0%", volume="+0%")
+            communicate = edge_tts.Communicate(text=text, voice=voice, rate="-5%", volume="+0%")
             await communicate.save(str(destination))
             if destination.exists() and destination.stat().st_size > 0:
                 return
@@ -198,9 +205,22 @@ def main() -> None:
     already_done = client.exists(state_key) and client.exists(out_key) and client.exists(meta_key)
     if bool(job.get("subtitles", True)):
         already_done = already_done and client.exists(sub_key)
+    checkpoint_current = False
     if already_done:
-        print(f"Chunk {args.index + 1}/{args.total} already complete; skipping", flush=True)
+        checkpoint_meta = Path(f"checkpoint_meta_{args.index:05d}.json")
+        try:
+            client.download(meta_key, checkpoint_meta)
+            saved = json.loads(checkpoint_meta.read_text(encoding="utf-8"))
+            checkpoint_current = int(saved.get("audioProfileVersion") or 0) == AUDIO_PROFILE_VERSION
+        except Exception as exc:
+            print(f"Cannot verify checkpoint audio profile: {exc}", flush=True)
+        finally:
+            checkpoint_meta.unlink(missing_ok=True)
+    if already_done and checkpoint_current:
+        print(f"Chunk {args.index + 1}/{args.total} already complete with audio profile {AUDIO_PROFILE_VERSION}; skipping", flush=True)
         return
+    if already_done:
+        print(f"Chunk {args.index + 1}/{args.total} uses an older audio profile; rebuilding", flush=True)
 
     if pause_checkpoint(client, job_id, "before chunk"):
         return
@@ -267,6 +287,13 @@ def main() -> None:
         start = max(0.0, float(seg.start))
         end = min(chunk_duration, max(start + 0.12, float(seg.end)))
         desired = max(0.12, end - start)
+        next_start = chunk_duration
+        if i + 1 < len(whisper_segments):
+            next_start = max(end, float(whisper_segments[i + 1].start))
+        free_gap = max(0.0, next_start - end - 0.08)
+        extension = min(MAX_GAP_EXTENSION, free_gap)
+        window_end = min(chunk_duration, end + extension)
+        speech_window = max(desired, window_end - start)
         clean_text = (text or original_texts[i]).strip()
         if not clean_text:
             continue
@@ -277,6 +304,7 @@ def main() -> None:
             "start": start,
             "end": end,
             "desired": desired,
+            "speech_window": speech_window,
             "text": clean_text,
             "voice": voice,
             "mp3": work / f"tts_{i:05d}.mp3",
@@ -304,9 +332,12 @@ def main() -> None:
         try:
             clip = AudioSegment.from_file(plan["mp3"])
             spoken = max(0.001, len(clip) / 1000.0)
-            if spoken > plan["desired"] * 1.03:
+            speech_window = max(plan["desired"], float(plan.get("speech_window") or plan["desired"]))
+            required_ratio = spoken / speech_window
+            tempo_ratio = min(MAX_TEMPO_RATIO, max(1.0, required_ratio))
+            if tempo_ratio > 1.01:
                 filters = [
-                    atempo_chain(spoken / plan["desired"]),
+                    atempo_chain(tempo_ratio),
                     "aresample=24000",
                     "aformat=sample_fmts=s16:channel_layouts=mono",
                 ]
@@ -316,9 +347,11 @@ def main() -> None:
                 ])
                 clip = AudioSegment.from_file(plan["wav"])
             clip = clip.set_frame_rate(24000).set_channels(1).set_sample_width(2)
-            max_len = max(120, int(plan["desired"] * 1000))
+            # Prefer a small overlap to robotic high-speed speech. Only trim a
+            # severe overrun so the following line is still intelligible.
+            max_len = max(300, int((speech_window + 0.55) * 1000))
             if len(clip) > max_len:
-                clip = clip[:max_len]
+                clip = clip[:max_len].fade_out(min(90, max_len // 5))
             timeline = timeline.overlay(clip, position=int(plan["start"] * 1000))
             successful_tts += 1
         except Exception as exc:
@@ -355,10 +388,11 @@ def main() -> None:
     ]
     if keep_music:
         filter_complex = (
-            "[0:a:0]aresample=48000,volume=0.95[base];"
-            "[1:a:0]aresample=48000,asplit=2[voice_sc][voice_mix];"
-            "[base][voice_sc]sidechaincompress=threshold=0.025:ratio=10:attack=8:release=280[ducked];"
-            "[ducked][voice_mix]amix=inputs=2:weights='1 1.15':normalize=0[aout]"
+            "[0:a:0]aresample=48000,volume=0.90[base];"
+            "[1:a:0]aresample=48000,loudnorm=I=-16:TP=-1.5:LRA=7,asplit=2[voice_sc][voice_mix];"
+            "[base][voice_sc]sidechaincompress=threshold=0.010:ratio=20:attack=4:release=220[ducked];"
+            "[ducked][voice_mix]amix=inputs=2:weights='0.80 1.35':normalize=0,"
+            "alimiter=limit=0.95[aout]"
         )
         run([
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
@@ -370,7 +404,8 @@ def main() -> None:
         run([
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
             "-i", str(source), "-i", str(dubbed_wav),
-            "-map", "0:v:0", "-map", "1:a:0", *common_video, str(output),
+            "-map", "0:v:0", "-map", "1:a:0", "-filter:a",
+            "loudnorm=I=-16:TP=-1.5:LRA=7", *common_video, str(output),
         ])
 
     if not output.exists() or output.stat().st_size <= 0:
@@ -381,6 +416,7 @@ def main() -> None:
 
     meta_path.write_text(json.dumps({
         "index": args.index,
+        "audioProfileVersion": AUDIO_PROFILE_VERSION,
         "duration": chunk_duration,
         "segments": len(whisper_segments),
         "ttsSegments": successful_tts,
