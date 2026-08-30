@@ -1,0 +1,283 @@
+name: Apply Final Completion Fix
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apply-final-completion-fix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WORKER_URL: https://wuxia-ai-dubbing.26nak-testdev.workers.dev
+      ACCESS_KEY: ${{ secrets.WUXIA_ACCESS_KEY }}
+      WORKER_TOKEN: ${{ secrets.WORKER_SHARED_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Apply completion, cleanup and fast merge fixes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new, label):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              if old not in text:
+                  raise SystemExit(f'Patch target not found: {label} in {path}')
+              text = text.replace(old, new, 1)
+              p.write_text(text, encoding='utf-8')
+              print('patched:', label)
+
+          # storage.js: bounded prefix deletion so every HTTP request stays under
+          # Cloudflare's subrequest budget.
+          replace_once('src/storage.js', '''async function deletePrefix(env, prefix) {
+            const files = await listAppFiles(env);
+            const matches = files.filter(f => String(f.appProperties?.logicalKey || '').startsWith(prefix));
+            let bytes = 0;
+            for (const f of matches) {
+              bytes += Number(f.size || 0);
+              await driveFetch(env, `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(f.id)}`, { method: 'DELETE' });
+            }
+            return { bytes, count: matches.length };
+          }''', '''async function deletePrefix(env, prefix, limit = null) {
+            const files = await listAppFiles(env);
+            const allMatches = files.filter(f => String(f.appProperties?.logicalKey || '').startsWith(prefix));
+            const requested = Number(limit);
+            const cap = Number.isFinite(requested) && requested > 0
+              ? Math.min(40, Math.floor(requested))
+              : allMatches.length;
+            const matches = allMatches.slice(0, cap);
+            let bytes = 0;
+            for (const f of matches) {
+              bytes += Number(f.size || 0);
+              await driveFetch(env, `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(f.id)}`, { method: 'DELETE' });
+            }
+            return { bytes, count: matches.length, remaining: Math.max(0, allMatches.length - matches.length) };
+          }''', 'bounded deletePrefix')
+
+          # Worker version marker.
+          p = Path('src/worker.js')
+          text = p.read_text(encoding='utf-8')
+          if "core: 'clean-v2.2'" not in text:
+              raise SystemExit('Worker core marker target not found')
+          text = text.replace("core: 'clean-v2.2'", "core: 'clean-v2.3'", 1)
+          p.write_text(text, encoding='utf-8')
+
+          # Completion must succeed before cleanup. Cleanup is performed later in
+          # fresh Worker invocations by the finalizer.
+          replace_once('src/worker.js', '''  if (p === '/api/internal/complete' && request.method === 'POST') {
+            const body = await request.json();
+            const job = await readJob(env, body.jobId);
+            if (!job) return json({ error: 'not found' }, 404);
+            job.status = 'completed';
+            job.pauseRequested = false;
+            job.progress = 100;
+            job.stage = 'เสร็จสมบูรณ์';
+            job.outputKey = body.outputKey || job.outputKey;
+            job.subtitleKey = body.subtitleKey || job.subtitleKey;
+            job.duration = body.duration || job.duration;
+            job.sizeBytes = body.sizeBytes || job.sizeBytes;
+            job.error = null;
+            await writeJob(env, job);
+            let freedBytes = 0;
+            if (job.autoCleanup) {
+              freedBytes += (await deletePrefix(env, `temp/${job.id}/`)).bytes;
+              freedBytes += (await deletePrefix(env, `_state/${job.id}/`)).bytes;
+              if (job.sourceType === 'upload' && body.deleteSource === true && job.sourceKey) {
+                freedBytes += await deleteLogical(env, job.sourceKey);
+                job.sourceKey = null;
+                await writeJob(env, job);
+              }
+            }
+            return json({ ok: true, job, freedBytes });
+          }''', '''  if (p === '/api/internal/complete' && request.method === 'POST') {
+            const body = await request.json();
+            const job = await readJob(env, body.jobId);
+            if (!job) return json({ error: 'not found' }, 404);
+            job.status = 'completed';
+            job.pauseRequested = false;
+            job.progress = 100;
+            job.stage = 'เสร็จสมบูรณ์';
+            job.outputKey = body.outputKey || job.outputKey;
+            job.subtitleKey = body.subtitleKey || job.subtitleKey;
+            job.duration = body.duration || job.duration;
+            job.sizeBytes = body.sizeBytes || job.sizeBytes;
+            job.error = null;
+            job.cleanupPending = job.autoCleanup === true;
+            await writeJob(env, job);
+            return json({ ok: true, job, freedBytes: 0, cleanupPending: job.cleanupPending });
+          }
+
+          if (p === '/api/internal/cleanup-job' && request.method === 'POST') {
+            const body = await request.json();
+            const jobId = String(body.jobId || '');
+            const kind = String(body.kind || '');
+            if (!jobId || !['temp', 'state'].includes(kind)) return json({ error: 'invalid cleanup request' }, 400);
+            const prefix = kind === 'temp' ? `temp/${jobId}/` : `_state/${jobId}/`;
+            const result = await deletePrefix(env, prefix, 12);
+            if (kind === 'state' && Number(result.remaining || 0) === 0) {
+              const job = await readJob(env, jobId);
+              if (job) {
+                job.cleanupPending = false;
+                await writeJob(env, job);
+              }
+            }
+            return json({ ok: true, kind, ...result });
+          }''', 'complete before cleanup')
+
+          # Recover a completed MP4 before checking whether the original upload
+          # still exists. This repairs jobs where finish() failed after upload.
+          replace_once('src/worker.js', '''    if (job.sourceType === 'upload' && job.sourceKey) {
+              const src = await resolveLogical(env, job.sourceKey);''', '''    if (action === 'retry') {
+              const target = String(job.targetLang || 'th');
+              const recoveredOutputKey = job.outputKey || `outputs/${job.id}/dub_${target}.mp4`;
+              const recoveredOutput = await resolveLogical(env, recoveredOutputKey);
+              if (recoveredOutput?.id && Number(recoveredOutput.size || 0) > 0) {
+                job.status = 'completed';
+                job.pauseRequested = false;
+                job.progress = 100;
+                job.stage = 'เสร็จสมบูรณ์';
+                job.outputKey = recoveredOutputKey;
+                job.sizeBytes = Number(recoveredOutput.size || 0);
+                if (job.subtitles !== false) {
+                  const recoveredSubtitleKey = `outputs/${job.id}/dub_${target}.srt`;
+                  const recoveredSubtitle = await resolveLogical(env, recoveredSubtitleKey);
+                  if (recoveredSubtitle?.id) job.subtitleKey = recoveredSubtitleKey;
+                }
+                job.error = null;
+                job.cleanupPending = job.autoCleanup === true;
+                await writeJob(env, job);
+                return json({ ok: true, job, recovered: true });
+              }
+            }
+
+            if (job.sourceType === 'upload' && job.sourceKey) {
+              const src = await resolveLogical(env, job.sourceKey);''', 'retry output recovery')
+
+          # Public storage cleanup also uses bounded batches. The browser repeats
+          # the endpoint until remaining reaches zero.
+          replace_once('src/worker.js', '''    let freedBytes = 0;
+            let deleted = 0;
+            for (const prefix of prefixes) {
+              const result = await deletePrefix(env, prefix);
+              freedBytes += Number(result.bytes || 0);
+              deleted += Number(result.count || 0);
+            }
+            return json({ ok: true, kind, freedBytes, deleted });''', '''    let freedBytes = 0;
+            let deleted = 0;
+            let remaining = 0;
+            const perPrefix = kind === 'all' ? 4 : kind === 'temp' ? 8 : 12;
+            for (const prefix of prefixes) {
+              const result = await deletePrefix(env, prefix, perPrefix);
+              freedBytes += Number(result.bytes || 0);
+              deleted += Number(result.count || 0);
+              remaining += Number(result.remaining || 0);
+            }
+            return json({ ok: true, kind, freedBytes, deleted, remaining });''', 'batched public cleanup')
+
+          # Worker client: expose one cleanup batch per request.
+          replace_once('scripts/worker_client.py', '''    def fail(self, job_id: str, error: str) -> dict[str, Any]:
+              return self._json("POST", "/api/internal/fail", json={"jobId": job_id, "error": error[:4000]})''', '''    def cleanup_job(self, job_id: str, kind: str) -> dict[str, Any]:
+              if kind not in {"temp", "state"}:
+                  raise ValueError("cleanup kind must be temp or state")
+              return self._json("POST", "/api/internal/cleanup-job", json={"jobId": job_id, "kind": kind})
+
+            def fail(self, job_id: str, error: str) -> dict[str, Any]:
+              return self._json("POST", "/api/internal/fail", json={"jobId": job_id, "error": error[:4000]})''', 'worker client cleanup')
+
+          # Fast MPEG-TS -> MP4 merge requires AAC ADTS-to-ASC conversion.
+          replace_once('scripts/finalize_job.py', '''        "-c", "copy",
+                "-avoid_negative_ts", "make_zero",''', '''        "-c", "copy",
+                "-bsf:a", "aac_adtstoasc",
+                "-avoid_negative_ts", "make_zero",''', 'AAC bitstream filter')
+
+          # Once finish() succeeds the job is already 100%. Cleanup errors are
+          # warnings only and can never turn the completed job into a failure.
+          replace_once('scripts/finalize_job.py', '''    client.patch_job(job_id, status="processing", progress=99, stage="กำลังบันทึกผลลัพธ์")
+            client.finish(job_id, output_key, subtitle_key, offset, size_bytes)
+            print(json.dumps({''', '''    client.patch_job(job_id, status="processing", progress=99, stage="กำลังบันทึกผลลัพธ์")
+            client.finish(job_id, output_key, subtitle_key, offset, size_bytes)
+
+            if bool(job.get("autoCleanup", True)):
+                for cleanup_kind in ("temp", "state"):
+                    for _ in range(200):
+                        try:
+                            cleanup = client.cleanup_job(job_id, cleanup_kind)
+                        except Exception as cleanup_error:
+                            print(f"Cleanup warning ({cleanup_kind}): {cleanup_error}", flush=True)
+                            break
+                        if int(cleanup.get("remaining") or 0) <= 0:
+                            break
+
+            print(json.dumps({''', 'best-effort post-completion cleanup')
+
+          # Browser repeats bounded cleanup requests until the category is empty.
+          replace_once('public/app.js', '''        const result = await api(`/api/cleanup/${kind}`, { method: 'POST', body: '{}' });
+                updateLoader(`ลบแล้ว คืนพื้นที่ ${fmtBytes(result.freedBytes)}`, 100);''', '''        let totalFreed = 0;
+                let result = { remaining: 1 };
+                let round = 0;
+                while (Number(result.remaining || 0) > 0 && round < 100) {
+                  result = await api(`/api/cleanup/${kind}`, { method: 'POST', body: '{}' });
+                  totalFreed += Number(result.freedBytes || 0);
+                  round += 1;
+                  if (Number(result.remaining || 0) > 0) {
+                    updateLoader(`กำลังลบ${label} เหลือ ${result.remaining} รายการ`, Math.min(92, 35 + round * 6));
+                  }
+                }
+                if (Number(result.remaining || 0) > 0) throw new Error('ยังลบไฟล์ไม่หมด กรุณากดลองอีกครั้ง');
+                updateLoader(`ลบแล้ว คืนพื้นที่ ${fmtBytes(totalFreed)}`, 100);''', 'repeat browser cleanup')
+
+          # Keep the normal deployment smoke test aligned with the new core.
+          p = Path('.github/workflows/deploy-cloudflare.yml')
+          text = p.read_text(encoding='utf-8')
+          if 'clean-v2.2' not in text:
+              raise SystemExit('deploy workflow core marker target not found')
+          p.write_text(text.replace('clean-v2.2', 'clean-v2.3'), encoding='utf-8')
+          print('patched: deployment smoke core')
+          PY
+
+      - name: Validate syntax
+        run: |
+          node --check src/worker.js
+          node --check src/storage.js
+          node --check public/app.js
+          python -m py_compile scripts/worker_client.py scripts/finalize_job.py scripts/prepare_job.py scripts/dub_chunk.py
+
+      - name: Commit repaired core
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/storage.js src/worker.js scripts/worker_client.py scripts/finalize_job.py public/app.js .github/workflows/deploy-cloudflare.yml
+          git commit -m "Fix final completion and batched cleanup"
+          git push origin main
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Deploy repaired Worker
+        run: |
+          npm install
+          npx wrangler deploy
+
+      - name: Verify deployed core
+        run: |
+          python - <<'PY'
+          import json, os, urllib.request
+          base = os.environ['WORKER_URL'].rstrip('/')
+          req = urllib.request.Request(base + '/api/health', headers={'User-Agent':'Mozilla/5.0 (Linux; Android 16; SM-S711B) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36'})
+          with urllib.request.urlopen(req, timeout=120) as r:
+              health = json.load(r)
+          assert health.get('core') == 'clean-v2.3', health
+          assert health.get('driveReady') is True, health
+          print('clean-v2.3 deployed: OK')
+          PY
