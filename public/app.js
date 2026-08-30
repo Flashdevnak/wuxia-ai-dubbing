@@ -34,11 +34,41 @@ async function api(path,opts={}){
   const key=getAccessKey();
   const headers={...(opts.headers||{}),'x-access-key':key};
   if(opts.body && !(opts.body instanceof Blob) && !(opts.body instanceof ArrayBuffer) && !headers['content-type']) headers['content-type']='application/json';
-  const r=await fetch(API_BASE+path,{...opts,headers});
+  const r=await fetch(API_BASE+path,{...opts,headers,cache:'no-store'});
   const data=await r.json().catch(()=>({}));
   if(r.status===401){ clearAccessKey(); throw new Error(data.error||'รหัสสำนักไม่ถูกต้อง'); }
   if(!r.ok)throw new Error(data.error||`HTTP ${r.status}`);
   return data;
+}
+
+function xhrUploadPart(url, blob, overallStart, totalBytes){
+  return new Promise((resolve,reject)=>{
+    const xhr=new XMLHttpRequest();
+    xhr.open('POST',url,true);
+    xhr.timeout=120000;
+    xhr.responseType='text';
+    xhr.setRequestHeader('x-access-key',getAccessKey());
+    xhr.setRequestHeader('cache-control','no-cache');
+    xhr.upload.onprogress=e=>{
+      if(!e.lengthComputable)return;
+      const sent=Math.min(totalBytes,overallStart+e.loaded);
+      const pct=totalBytes?sent/totalBytes*100:0;
+      $('#uploadPct').textContent=Math.floor(pct)+'%';
+      $('#uploadBar').style.width=pct+'%';
+      $('#uploadStatus').textContent=`กำลังส่งไฟล์ · ${fmtBytes(sent)} / ${fmtBytes(totalBytes)}`;
+    };
+    xhr.onload=()=>{
+      let data={};
+      try{data=xhr.responseText?JSON.parse(xhr.responseText):{};}catch{}
+      if(xhr.status===401){clearAccessKey();reject(new Error(data.error||'รหัสสำนักไม่ถูกต้อง'));return;}
+      if(xhr.status>=200&&xhr.status<300){resolve(data);return;}
+      reject(new Error(data.error||data.detail||`HTTP ${xhr.status}`));
+    };
+    xhr.onerror=()=>reject(new Error('การเชื่อมต่อขาดระหว่างส่งไฟล์จากมือถือ'));
+    xhr.ontimeout=()=>reject(new Error('อัปโหลดส่วนนี้เกิน 120 วินาที'));
+    xhr.onabort=()=>reject(new Error('การอัปโหลดถูกยกเลิก'));
+    xhr.send(blob);
+  });
 }
 
 function showLoader(title,text='กำลังเตรียมงาน',pct=5){$('#loadingTitle').textContent=title;$('#loadingText').textContent=text;$('#loadingPercent').textContent=pct+'%';$('#loadingBar').style.width=pct+'%';$('#loadingOverlay').classList.remove('hidden');}
@@ -46,24 +76,65 @@ function updateLoader(text,pct){$('#loadingText').textContent=text;$('#loadingPe
 function hideLoader(){setTimeout(()=>$('#loadingOverlay').classList.add('hidden'),250);}
 
 async function uploadFile(file){
-  const init=await api('/api/uploads/start',{method:'POST',body:JSON.stringify({name:file.name,size:file.size,type:file.type})});
-  const {key,uploadId,partSize}=init; const total=Math.ceil(file.size/partSize); const parts=[]; $('#uploadProgress').classList.remove('hidden'); $('#uploadName').textContent=file.name;
+  $('#uploadProgress').classList.remove('hidden');
+  $('#uploadName').textContent=file.name;
+  $('#uploadPct').textContent='0%';
+  $('#uploadBar').style.width='0%';
+  $('#uploadStatus').textContent='กำลังเปิดการอัปโหลดกับ Google Drive...';
+
+  let init;
+  try{
+    init=await api('/api/uploads/start',{method:'POST',body:JSON.stringify({name:file.name,size:file.size,type:file.type||'application/octet-stream'})});
+  }catch(e){
+    throw new Error(`เริ่มอัปโหลดไม่สำเร็จ: ${e.message}`);
+  }
+
+  const {key,uploadId,partSize}=init;
+  const total=Math.ceil(file.size/partSize);
+  const parts=[];
+  $('#uploadStatus').textContent=`เชื่อม Google Drive แล้ว · เตรียมส่ง ${total} ส่วน`;
+
   for(let i=0;i<total;i++){
-    const start=i*partSize,end=Math.min(file.size,start+partSize),blob=file.slice(start,end); let attempt=0,done=false,lastErr;
+    const start=i*partSize;
+    const end=Math.min(file.size,start+partSize);
+    const blob=file.slice(start,end,file.type||'application/octet-stream');
+    let attempt=0,done=false,lastErr;
+    const partUrl=`${API_BASE}/api/uploads/part?key=${encodeURIComponent(key)}&uploadId=${encodeURIComponent(uploadId)}&partNumber=${i+1}`;
+
     while(attempt<4&&!done){
       attempt++;
+      $('#uploadStatus').textContent=`กำลังส่งส่วน ${i+1}/${total}${attempt>1?` · ลองใหม่ครั้งที่ ${attempt}`:''}`;
       try{
-        const r=await fetch(`${API_BASE}/api/uploads/part?key=${encodeURIComponent(key)}&uploadId=${encodeURIComponent(uploadId)}&partNumber=${i+1}`,{method:'POST',headers:{'x-access-key':getAccessKey()},body:blob,cache:'no-store'});
-        const d=await r.json().catch(()=>({}));
-        if(r.status===401){clearAccessKey();throw new Error('รหัสสำนักไม่ถูกต้อง');}
-        if(!r.ok)throw new Error(d.error||'upload failed');
-        parts.push({partNumber:d.partNumber,etag:d.etag});done=true;
-      }catch(e){lastErr=e;await sleep(700*attempt);}
+        const d=await xhrUploadPart(partUrl,blob,start,file.size);
+        if(!d||!d.partNumber)throw new Error('เซิร์ฟเวอร์ไม่ยืนยันส่วนไฟล์');
+        parts.push({partNumber:d.partNumber,etag:d.etag});
+        done=true;
+      }catch(e){
+        lastErr=e;
+        if(attempt<4)await sleep(900*attempt);
+      }
     }
-    if(!done){await api('/api/uploads/abort',{method:'POST',body:JSON.stringify({key,uploadId})}).catch(()=>{});throw lastErr;}
-    const pct=((i+1)/total)*100;$('#uploadPct').textContent=Math.round(pct)+'%';$('#uploadBar').style.width=pct+'%';$('#uploadStatus').textContent=`อัปโหลดช่วง ${i+1}/${total} · ${fmtBytes(end)} / ${fmtBytes(file.size)}`;
+
+    if(!done){
+      await api('/api/uploads/abort',{method:'POST',body:JSON.stringify({key,uploadId})}).catch(()=>{});
+      throw new Error(`ส่งส่วน ${i+1}/${total} ไม่สำเร็จ: ${lastErr?.message||'network error'}`);
+    }
+
+    const pct=((i+1)/total)*100;
+    $('#uploadPct').textContent=Math.round(pct)+'%';
+    $('#uploadBar').style.width=pct+'%';
+    $('#uploadStatus').textContent=`อัปโหลดช่วง ${i+1}/${total} · ${fmtBytes(end)} / ${fmtBytes(file.size)}`;
   }
-  parts.sort((a,b)=>a.partNumber-b.partNumber); await api('/api/uploads/complete',{method:'POST',body:JSON.stringify({key,uploadId,parts})}); state.sourceKey=key; $('#uploadStatus').textContent='อัปโหลดเสร็จแล้ว พร้อมสร้างงาน'; await loadStorage(); return key;
+
+  parts.sort((a,b)=>a.partNumber-b.partNumber);
+  $('#uploadStatus').textContent='ส่งไฟล์ครบแล้ว · กำลังตรวจสอบไฟล์บน Google Drive';
+  await api('/api/uploads/complete',{method:'POST',body:JSON.stringify({key,uploadId,parts})});
+  state.sourceKey=key;
+  $('#uploadPct').textContent='100%';
+  $('#uploadBar').style.width='100%';
+  $('#uploadStatus').textContent='อัปโหลดเสร็จแล้ว พร้อมสร้างงาน';
+  await loadStorage();
+  return key;
 }
 
 async function createJob(){
