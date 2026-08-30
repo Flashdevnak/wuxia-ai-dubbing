@@ -621,6 +621,16 @@ async function handleApi(request, env, url) {
   const cleanup = p.match(/^\/api\/cleanup\/(uploads|temp|outputs|all)$/);
   if (cleanup && request.method === 'POST') {
     const kind = cleanup[1];
+    if (kind !== 'outputs') {
+      const jobs = await listJobs(env);
+      const active = jobs.filter(job => ['queued', 'processing', 'paused'].includes(String(job.status || '')));
+      if (active.length) {
+        return json({
+          error: 'ยังมีงานที่กำลังทำหรือหยุดชั่วคราวอยู่ กรุณาให้งานเสร็จหรือลบงานก่อน',
+          activeJobs: active.length,
+        }, 409);
+      }
+    }
     const prefixes = kind === 'all'
       ? ['uploads/', 'temp/', 'outputs/', '_state/', '_jobs/']
       : kind === 'temp'
