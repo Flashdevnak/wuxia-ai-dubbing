@@ -77,6 +77,40 @@ function noStore(response) {
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers: h });
 }
 
+function cleanProgress(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.max(0, Math.min(100, Math.round(n))) : 0;
+}
+
+function parseTranslationValue(value, expectedCount) {
+  if (Array.isArray(value)) {
+    if (value.length === expectedCount) return value.map(x => String(x));
+    return null;
+  }
+  if (value && typeof value === 'object') {
+    for (const key of ['translations', 'response', 'result', 'output']) {
+      if (key in value) {
+        const nested = parseTranslationValue(value[key], expectedCount);
+        if (nested) return nested;
+      }
+    }
+    return null;
+  }
+  if (typeof value !== 'string') return null;
+  const text = value.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  const candidates = [text];
+  const match = text.match(/\[[\s\S]*\]/);
+  if (match && match[0] !== text) candidates.push(match[0]);
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      const normalized = parseTranslationValue(parsed, expectedCount);
+      if (normalized) return normalized;
+    } catch {}
+  }
+  return null;
+}
+
 async function triggerGitHub(env, job, workerBase) {
   if (!env.GITHUB_REPO || !env.GITHUB_TOKEN) return { triggered: false, reason: 'GitHub dispatch not configured' };
   const res = await fetch(`https://api.github.com/repos/${env.GITHUB_REPO}/dispatches`, {
@@ -110,12 +144,9 @@ async function translateWithAI(env, texts, sourceLang, targetLang) {
     max_tokens: 4096,
   };
   const out = await env.AI.run(env.TRANSLATE_MODEL || '@cf/meta/llama-3.1-8b-instruct-fast', payload);
-  const text = String(out?.response || out?.result?.response || '').trim();
-  const match = text.match(/\[[\s\S]*\]/);
-  if (!match) throw new Error('Workers AI translation returned invalid JSON');
-  const parsed = JSON.parse(match[0]);
-  if (!Array.isArray(parsed) || parsed.length !== texts.length) throw new Error('Workers AI translation count mismatch');
-  return parsed.map(x => String(x));
+  const translations = parseTranslationValue(out, texts.length);
+  if (!translations) throw new Error('Workers AI translation returned unusable JSON');
+  return translations;
 }
 
 async function handleInternal(request, env, url) {
@@ -132,8 +163,9 @@ async function handleInternal(request, env, url) {
       const current = await readJob(env, id);
       if (!current) return json({ error: 'not found' }, 404);
       const patch = await request.json();
-      const allowed = ['status', 'progress', 'stage', 'outputKey', 'subtitleKey', 'log', 'duration', 'sizeBytes', 'chunkTotal', 'error'];
+      const allowed = ['status', 'stage', 'outputKey', 'subtitleKey', 'log', 'duration', 'sizeBytes', 'chunkTotal', 'error'];
       for (const k of allowed) if (k in patch) current[k] = patch[k];
+      if ('progress' in patch) current.progress = Math.max(cleanProgress(current.progress), cleanProgress(patch.progress));
       await writeJob(env, current);
       return json({ job: current });
     }
@@ -174,8 +206,9 @@ async function handleInternal(request, env, url) {
     const job = await readJob(env, jobId);
     if (job) {
       job.status = 'processing';
-      job.progress = Math.min(92, Math.round(12 + (completed / total) * 78));
-      job.stage = completed >= total ? 'กำลังรวมวิดีโอ' : `พากย์เสร็จ ${completed}/${total} ช่วง`;
+      const computed = Math.min(92, Math.round(28 + (completed / total) * 62));
+      job.progress = Math.max(cleanProgress(job.progress), computed);
+      job.stage = completed >= total ? 'พากย์ครบแล้ว · กำลังรวมวิดีโอ' : `พากย์เสร็จ ${completed}/${total} ช่วง`;
       await writeJob(env, job);
     }
     return json({ ok: true, completed, total, allDone: completed >= total });
@@ -220,8 +253,9 @@ async function handleInternal(request, env, url) {
     const job = await readJob(env, body.jobId);
     if (!job) return json({ error: 'not found' }, 404);
     job.status = 'failed';
+    job.progress = Math.max(3, cleanProgress(job.progress));
     job.stage = 'ประมวลผลไม่สำเร็จ';
-    job.error = String(body.error || 'unknown error').slice(0, 4000);
+    job.error = String(body.error || 'unknown error').slice(0, 1800);
     await writeJob(env, job);
     return json({ ok: true });
   }
@@ -245,7 +279,7 @@ async function handleApi(request, env, url) {
       ok: true,
       app: env.APP_NAME || 'Wuxia AI Dubbing',
       backend: 'google-drive',
-      core: 'clean-v2',
+      core: 'clean-v2.1',
       uploadMode: 'same-origin-multipart',
       publicPartSize: PUBLIC_PART_SIZE,
       driveReady,
@@ -322,12 +356,13 @@ async function handleApi(request, env, url) {
       sourceLang: body.sourceLang || 'auto',
       targetLang: body.targetLang || 'th',
       voiceMode: body.voiceMode || 'auto',
+      processingMode: ['fast', 'balanced', 'quality'].includes(body.processingMode) ? body.processingMode : 'fast',
       subtitles: body.subtitles !== false,
       keepMusic: body.keepMusic !== false,
-      speakerSeparation: body.speakerSeparation !== false,
+      speakerSeparation: body.speakerSeparation === true,
       autoCleanup: body.autoCleanup !== false,
       status: 'queued',
-      progress: 1,
+      progress: 3,
       stage: 'เข้าคิวประมวลผล',
       createdAt: new Date().toISOString(),
     };
@@ -382,7 +417,7 @@ export default {
         response = await handleApi(request, env, url);
       } else {
         response = await env.ASSETS.fetch(request);
-        if (url.pathname === '/' || url.pathname === '/index.html' || url.pathname === '/app.js') response = noStore(response);
+        if (url.pathname === '/' || url.pathname === '/index.html' || url.pathname === '/app.js' || url.pathname === '/styles.css') response = noStore(response);
       }
       return withCors(response, request, env);
     } catch (err) {
