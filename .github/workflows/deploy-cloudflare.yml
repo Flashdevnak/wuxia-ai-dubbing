@@ -69,7 +69,7 @@ jobs:
           printf '%s' "$GOOGLE_CLIENT_SECRET" | npx wrangler secret put GOOGLE_CLIENT_SECRET
           printf '%s' "$GOOGLE_REFRESH_TOKEN" | npx wrangler secret put GOOGLE_REFRESH_TOKEN
 
-      - name: Smoke test Google Drive upload through Worker
+      - name: Smoke test Google Drive resumable upload through Worker
         env:
           ACCESS_KEY: ${{ secrets.WUXIA_ACCESS_KEY }}
           WORKER_URL: https://wuxia-ai-dubbing.26nak-testdev.workers.dev
@@ -107,25 +107,37 @@ jobs:
               raise RuntimeError(f'Drive health failed: {health}')
           print('health: OK')
 
-          size = 1024 * 1024
+          size = 5 * 1024 * 1024
           _, started = call('/api/uploads/start', 'POST', {
-              'name': '__deploy_smoke__.bin',
+              'name': '__deploy_smoke_multichunk__.bin',
               'size': size,
               'type': 'application/octet-stream',
           })
           key = started['key']
           upload_id = started['uploadId']
           part_size = int(started['partSize'])
+          if part_size != 4 * 1024 * 1024:
+              raise RuntimeError(f'Unexpected partSize={part_size}')
           print(f'upload start: OK (partSize={part_size})')
 
-          q = urllib.parse.urlencode({'key': key, 'uploadId': upload_id, 'partNumber': 1})
-          payload = b'W' * size
-          _, part = call('/api/uploads/part?' + q, 'PUT', payload, {'content-type': 'application/octet-stream'})
-          if not part.get('complete'):
-              raise RuntimeError(f'Upload part did not complete: {part}')
-          print('upload part: OK')
+          parts = []
+          first = b'A' * part_size
+          q1 = urllib.parse.urlencode({'key': key, 'uploadId': upload_id, 'partNumber': 1})
+          _, p1 = call('/api/uploads/part?' + q1, 'PUT', first, {'content-type': 'application/octet-stream'})
+          if p1.get('complete'):
+              raise RuntimeError(f'First chunk completed unexpectedly: {p1}')
+          parts.append({'partNumber': 1, 'etag': p1.get('etag')})
+          print('upload chunk 1/2: OK (resume incomplete handled)')
 
-          _, done = call('/api/uploads/complete', 'POST', {'key': key, 'uploadId': upload_id, 'parts': [{'partNumber': 1, 'etag': part.get('etag')}]})
+          second = b'B' * (size - part_size)
+          q2 = urllib.parse.urlencode({'key': key, 'uploadId': upload_id, 'partNumber': 2})
+          _, p2 = call('/api/uploads/part?' + q2, 'PUT', second, {'content-type': 'application/octet-stream'})
+          if not p2.get('complete'):
+              raise RuntimeError(f'Final chunk did not complete: {p2}')
+          parts.append({'partNumber': 2, 'etag': p2.get('etag')})
+          print('upload chunk 2/2: OK')
+
+          _, done = call('/api/uploads/complete', 'POST', {'key': key, 'uploadId': upload_id, 'parts': parts})
           if int(done.get('size', -1)) != size:
               raise RuntimeError(f'Upload size mismatch: {done}')
           print('upload complete: OK')
@@ -144,4 +156,4 @@ jobs:
           echo '- Storage: Google Drive (`Wuxia AI Dubbing` folder)' >> "$GITHUB_STEP_SUMMARY"
           echo '- R2: removed / not required' >> "$GITHUB_STEP_SUMMARY"
           echo '- Workers AI translation binding: `AI`' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Real 1 MiB upload smoke test: passed' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Real 5 MiB / 2-chunk resumable upload smoke test: passed' >> "$GITHUB_STEP_SUMMARY"
