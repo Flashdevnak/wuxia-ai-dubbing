@@ -83,7 +83,6 @@ async def list_matching_voices(lang: str, mode: str) -> list[str]:
     names = [str(v["ShortName"]) for v in candidates if v.get("ShortName")]
     if not names:
         raise RuntimeError(f"No Edge TTS voice found for {lang} / {locale}")
-    # Keep a few voices for the optional multi-character heuristic.
     return names[:4]
 
 
@@ -106,8 +105,6 @@ def translate_texts(client: WorkerClient, texts: list[str], source_lang: str, ta
         return texts
 
     translated: list[str] = []
-    # First prefer the Cloudflare Workers AI endpoint. It keeps translation behind
-    # our own Worker and avoids putting any third-party API key in Actions.
     try:
         for i in range(0, len(texts), 12):
             batch = texts[i:i + 12]
@@ -141,12 +138,12 @@ def translate_texts(client: WorkerClient, texts: list[str], source_lang: str, ta
     return translated
 
 
-def choose_voice(voices: list[str], segment_index: int, gap: float, speaker_mode: bool, state: dict) -> str:
+def choose_voice(voices: list[str], gap: float, speaker_mode: bool, state: dict) -> str:
     if len(voices) == 1 or not speaker_mode:
         return voices[0]
-    # This is a lightweight no-account heuristic, not biometric speaker ID.
-    # A long pause rotates among available voices to make multi-character clips
-    # less monotonous while keeping the system fully free.
+    # Free-tier heuristic only: rotate voices after a long pause. This is not
+    # biometric speaker identification and deliberately avoids requiring a
+    # paid diarization service or external account.
     if gap >= 1.8:
         state["voice_index"] = (state.get("voice_index", 0) + 1) % len(voices)
     return voices[state.get("voice_index", 0) % len(voices)]
@@ -171,8 +168,9 @@ def main() -> None:
     source = work / "source.mkv"
     audio = work / "speech.wav"
     dubbed_wav = work / "dubbed_voice.wav"
-    output = work / f"chunk_{args.index:05d}.mp4"
+    output = work / f"chunk_{args.index:05d}.ts"
     subtitle_path = work / f"chunk_{args.index:05d}.srt"
+    meta_path = work / f"chunk_{args.index:05d}.json"
 
     client.download(args.key, source)
     chunk_duration = duration(source)
@@ -216,7 +214,7 @@ def main() -> None:
         if not clean_text:
             continue
         gap = max(0.0, start - previous_end)
-        voice = choose_voice(voices, i, gap, bool(job.get("speakerSeparation", False)), voice_state)
+        voice = choose_voice(voices, gap, bool(job.get("speakerSeparation", False)), voice_state)
         tts_mp3 = work / f"tts_{i:05d}.mp3"
         tts_wav = work / f"tts_{i:05d}.wav"
         asyncio.run(synthesize(clean_text, voice, tts_mp3))
@@ -248,6 +246,11 @@ def main() -> None:
     subtitle_path.write_text(srt.compose(subtitles), encoding="utf-8")
 
     keep_music = bool(job.get("keepMusic", True))
+    common_video = [
+        "-vf", "scale=-2:'min(1080,ih)'",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-f", "mpegts",
+    ]
     if keep_music:
         filter_complex = (
             "[0:a:0]aresample=48000,volume=0.95[base];"
@@ -259,31 +262,34 @@ def main() -> None:
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
             "-i", str(source), "-i", str(dubbed_wav),
             "-filter_complex", filter_complex,
-            "-map", "0:v:0", "-map", "[aout]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-            "-shortest", "-movflags", "+faststart", str(output),
+            "-map", "0:v:0", "-map", "[aout]", *common_video, str(output),
         ])
     else:
         run([
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
             "-i", str(source), "-i", str(dubbed_wav),
-            "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-            "-shortest", "-movflags", "+faststart", str(output),
+            "-map", "0:v:0", "-map", "1:a:0", *common_video, str(output),
         ])
 
-    out_key = f"temp/{job_id}/dub/chunk_{args.index:05d}.mp4"
+    out_key = f"temp/{job_id}/dub/chunk_{args.index:05d}.ts"
     sub_key = f"temp/{job_id}/subs/chunk_{args.index:05d}.srt"
-    client.upload(output, out_key, "video/mp4")
-    if bool(job.get("subtitles", True)):
-        client.upload(subtitle_path, sub_key, "application/x-subrip")
-    client.mark_chunk_complete(job_id, args.index, args.total)
-    print(json.dumps({
-        "jobId": job_id,
+    meta_key = f"temp/{job_id}/meta/chunk_{args.index:05d}.json"
+    meta_path.write_text(json.dumps({
         "index": args.index,
+        "duration": chunk_duration,
         "segments": len(whisper_segments),
         "detectedLanguage": detected_lang,
         "targetLanguage": target_lang,
         "outputKey": out_key,
-    }, ensure_ascii=False))
+        "subtitleKey": sub_key if bool(job.get("subtitles", True)) else None,
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    client.upload(output, out_key, "video/mp2t")
+    client.upload(meta_path, meta_key, "application/json")
+    if bool(job.get("subtitles", True)):
+        client.upload(subtitle_path, sub_key, "application/x-subrip")
+    client.mark_chunk_complete(job_id, args.index, args.total)
+    print(meta_path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
