@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import shlex
@@ -27,25 +28,51 @@ def run_capture(cmd: list[str]) -> str:
     return p.stdout.strip()
 
 
-def yt_direct_url(url: str) -> str:
-    # YouTube regularly changes which clients/formats are available on datacenter
-    # IPs. Try a few progressive-format strategies so ffmpeg can stream one URL
-    # without downloading the entire source to the GitHub runner first.
+def build_cookie_file() -> Path | None:
+    """Decode an optional Netscape cookies.txt supplied through a GitHub secret.
+
+    The secret is base64-encoded so multiline cookie files survive GitHub Actions
+    environment handling without being printed to logs.
+    """
+    raw = (os.environ.get("YOUTUBE_COOKIES_B64") or "").strip()
+    if not raw:
+        return None
+    try:
+        data = base64.b64decode(raw, validate=True)
+    except Exception as exc:
+        raise RuntimeError("YOUTUBE_COOKIES_B64 ไม่ใช่ Base64 ที่ถูกต้อง") from exc
+    if not data.strip():
+        raise RuntimeError("YOUTUBE_COOKIES_B64 ว่างเปล่า")
+    path = Path("work_prepare") / "youtube-cookies.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+    return path
+
+
+def yt_direct_url(url: str, cookies_file: Path | None = None) -> str:
+    # YouTube often blocks datacenter IPs used by GitHub-hosted runners. Try a few
+    # progressive-format clients. If the owner supplied a cookies.txt secret, use
+    # it for all attempts without ever printing its contents.
+    cookie_args = ["--cookies", str(cookies_file)] if cookies_file else []
     attempts = [
         [
-            "yt-dlp", "--no-playlist", "--no-warnings", "-g",
+            "yt-dlp", "--no-playlist", "--no-warnings", *cookie_args, "-g",
             "-f", "best[height<=1080][acodec!=none][vcodec!=none]/best[acodec!=none][vcodec!=none]/best",
             url,
         ],
         [
-            "yt-dlp", "--no-playlist", "--no-warnings",
+            "yt-dlp", "--no-playlist", "--no-warnings", *cookie_args,
             "--extractor-args", "youtube:player_client=android_vr,web_safari",
             "-g", "-f",
             "best[height<=720][acodec!=none][vcodec!=none]/best[acodec!=none][vcodec!=none]/best",
             url,
         ],
         [
-            "yt-dlp", "--no-playlist", "--no-warnings",
+            "yt-dlp", "--no-playlist", "--no-warnings", *cookie_args,
             "--extractor-args", "youtube:player_client=tv,web",
             "-g", "-f",
             "best[height<=720][acodec!=none][vcodec!=none]/best[acodec!=none][vcodec!=none]/best",
@@ -53,6 +80,7 @@ def yt_direct_url(url: str) -> str:
         ],
     ]
     errors: list[str] = []
+    bot_blocked = False
     for idx, cmd in enumerate(attempts, start=1):
         try:
             out = run_capture(cmd)
@@ -63,9 +91,26 @@ def yt_direct_url(url: str) -> str:
             errors.append(f"strategy {idx}: yt-dlp returned no playable URL")
         except Exception as exc:
             msg = str(exc)
+            if "Sign in to confirm you’re not a bot" in msg or "Sign in to confirm you're not a bot" in msg:
+                bot_blocked = True
             errors.append(f"strategy {idx}: {msg}")
             print(f"yt-dlp strategy {idx} failed: {msg}", flush=True)
-    raise RuntimeError("Unable to open YouTube source. " + " | ".join(errors))
+
+    if bot_blocked and not cookies_file:
+        raise RuntimeError(
+            "YouTube บล็อก IP ของ GitHub Actions และขอให้ยืนยันการเข้าสู่ระบบ "
+            "จึงดึงวิดีโอจากลิงก์โดยตรงไม่ได้ในตอนนี้ กรุณาใช้โหมดอัปโหลดไฟล์ "
+            "หรือเพิ่ม GitHub Secret ชื่อ YOUTUBE_COOKIES_B64 สำหรับบัญชีที่มีสิทธิ์ดูวิดีโอนี้"
+        )
+    if bot_blocked and cookies_file:
+        raise RuntimeError(
+            "YouTube ยังปฏิเสธการเข้าถึงแม้ใช้ cookies แล้ว อาจเป็นเพราะ cookies หมดอายุ "
+            "หรือ YouTube ไม่ยอมรับ IP ของ GitHub Actions กรุณาสร้าง cookies ใหม่หรือใช้โหมดอัปโหลดไฟล์"
+        )
+    tail = " | ".join(errors[-2:])
+    if len(tail) > 700:
+        tail = tail[-700:]
+    raise RuntimeError("เปิดแหล่งวิดีโอ YouTube ไม่สำเร็จ: " + tail)
 
 
 def probe_duration(input_url: str, headers: str | None = None) -> float:
@@ -105,12 +150,14 @@ def main() -> None:
         if not source_url:
             raise RuntimeError("Link job has no sourceUrl")
         try:
-            input_url = yt_direct_url(source_url)
+            cookies_file = build_cookie_file()
+            input_url = yt_direct_url(source_url, cookies_file)
         except Exception as exc:
-            # Surface the real reason in the web UI instead of leaving the card at 1%.
+            # Surface a concise, actionable reason in the web UI instead of a raw
+            # yt-dlp traceback that can fill the whole mobile job card.
             message = str(exc)
-            if len(message) > 1200:
-                message = message[-1200:]
+            if len(message) > 900:
+                message = message[-900:]
             client.fail(job_id, "เปิดลิงก์ YouTube ไม่สำเร็จ: " + message)
             raise
 
