@@ -2,9 +2,22 @@ name: Deploy Cloudflare Backend
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'public/**'
+      - 'wrangler.jsonc'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/deploy-cloudflare.yml'
 
 permissions:
   contents: read
+
+concurrency:
+  group: cloudflare-production
+  cancel-in-progress: false
 
 jobs:
   deploy:
