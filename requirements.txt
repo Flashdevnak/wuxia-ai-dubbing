@@ -3,4 +3,5 @@ edge-tts>=7.2.0,<8
 deep-translator>=1.11.4,<2
 requests>=2.32.0,<3
 srt>=3.5.3,<4
+pydub>=0.25.1,<1
 yt-dlp>=2026.8.0
