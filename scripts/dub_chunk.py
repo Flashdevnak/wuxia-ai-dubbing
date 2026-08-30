@@ -96,8 +96,23 @@ async def synthesize(text: str, voice: str, destination: Path) -> None:
                 return
         except Exception as exc:
             last = exc
-            await asyncio.sleep(attempt * 1.5)
+            await asyncio.sleep(attempt * 1.2)
     raise RuntimeError(f"TTS failed after retries: {last}")
+
+
+async def synthesize_many(plans: list[dict], concurrency: int = 4) -> None:
+    sem = asyncio.Semaphore(max(1, concurrency))
+
+    async def one(plan: dict) -> None:
+        async with sem:
+            try:
+                await synthesize(plan["text"], plan["voice"], plan["mp3"])
+                plan["tts_ok"] = True
+            except Exception as exc:
+                plan["tts_ok"] = False
+                plan["tts_error"] = str(exc)
+
+    await asyncio.gather(*(one(p) for p in plans))
 
 
 def translate_texts(client: WorkerClient, texts: list[str], source_lang: str, target_lang: str) -> list[str]:
@@ -114,7 +129,7 @@ def translate_texts(client: WorkerClient, texts: list[str], source_lang: str, ta
             translated.extend(got)
         return translated
     except Exception as exc:
-        print("Workers AI translation unavailable, falling back to GoogleTranslator:", exc)
+        print("Workers AI translation unavailable, falling back to GoogleTranslator:", exc, flush=True)
 
     source = "auto" if source_lang == "auto" else GOOGLE_CODES.get(source_lang, source_lang)
     target = GOOGLE_CODES.get(target_lang, target_lang)
@@ -131,9 +146,9 @@ def translate_texts(client: WorkerClient, texts: list[str], source_lang: str, ta
                 break
             except Exception as exc:
                 last = exc
-                time.sleep(attempt * 1.3)
+                time.sleep(attempt * 1.0)
         if last is not None:
-            print(f"Translation failed for segment {idx}; using source text: {last}")
+            print(f"Translation failed for segment {idx}; using source text: {last}", flush=True)
             translated.append(text)
     return translated
 
@@ -141,9 +156,6 @@ def translate_texts(client: WorkerClient, texts: list[str], source_lang: str, ta
 def choose_voice(voices: list[str], gap: float, speaker_mode: bool, state: dict) -> str:
     if len(voices) == 1 or not speaker_mode:
         return voices[0]
-    # Free-tier heuristic only: rotate voices after a long pause. This is not
-    # biometric speaker identification and deliberately avoids requiring a
-    # paid diarization service or external account.
     if gap >= 1.8:
         state["voice_index"] = (state.get("voice_index", 0) + 1) % len(voices)
     return voices[state.get("voice_index", 0) % len(voices)]
@@ -162,6 +174,7 @@ def main() -> None:
     job = json.loads(Path(args.job).read_text(encoding="utf-8"))
     job_id = job["id"]
     client = WorkerClient(args.worker_url, args.token)
+    mode = str(job.get("processingMode") or "fast")
 
     work = Path(f"work_chunk_{args.index:05d}")
     work.mkdir(parents=True, exist_ok=True)
@@ -172,6 +185,7 @@ def main() -> None:
     subtitle_path = work / f"chunk_{args.index:05d}.srt"
     meta_path = work / f"chunk_{args.index:05d}.json"
 
+    client.patch_job(job_id, status="processing", progress=12, stage=f"กำลังถอดเสียงช่วง {args.index + 1}/{args.total}")
     client.download(args.key, source)
     chunk_duration = duration(source)
     if chunk_duration <= 0:
@@ -184,27 +198,35 @@ def main() -> None:
         "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(audio),
     ])
 
-    model_name = os.environ.get("WHISPER_MODEL", "small")
+    model_name = os.environ.get("WHISPER_MODEL", "base")
+    beam_size = 1 if mode == "fast" else (2 if mode == "balanced" else 3)
     model = WhisperModel(model_name, device="cpu", compute_type="int8", cpu_threads=max(2, os.cpu_count() or 2))
     requested_source = job.get("sourceLang", "auto")
     whisper_lang = None if requested_source == "auto" else requested_source
     seg_iter, info = model.transcribe(
-        str(audio), language=whisper_lang, vad_filter=True, beam_size=3,
-        condition_on_previous_text=True,
+        str(audio),
+        language=whisper_lang,
+        vad_filter=True,
+        beam_size=beam_size,
+        best_of=1,
+        condition_on_previous_text=(mode == "quality"),
     )
     whisper_segments = [s for s in seg_iter if str(s.text or "").strip()]
     detected_lang = str(getattr(info, "language", None) or requested_source or "auto")
     target_lang = str(job.get("targetLang") or "th")
+    client.patch_job(job_id, progress=15, stage=f"ถอดเสียงช่วง {args.index + 1}/{args.total} เสร็จ · กำลังแปล")
 
     original_texts = [str(s.text).strip() for s in whisper_segments]
     translated = translate_texts(client, original_texts, detected_lang, target_lang)
     voices = asyncio.run(list_matching_voices(target_lang, str(job.get("voiceMode") or "auto")))
+    client.patch_job(job_id, progress=17, stage=f"แปลช่วง {args.index + 1}/{args.total} เสร็จ · กำลังสร้างเสียง")
 
     timeline = AudioSegment.silent(duration=max(1, int(math.ceil(chunk_duration * 1000))), frame_rate=24000)
     timeline = timeline.set_channels(1).set_sample_width(2)
     subtitles: list[srt.Subtitle] = []
     voice_state = {"voice_index": 0}
     previous_end = 0.0
+    plans: list[dict] = []
 
     for i, (seg, text) in enumerate(zip(whisper_segments, translated)):
         start = max(0.0, float(seg.start))
@@ -215,23 +237,16 @@ def main() -> None:
             continue
         gap = max(0.0, start - previous_end)
         voice = choose_voice(voices, gap, bool(job.get("speakerSeparation", False)), voice_state)
-        tts_mp3 = work / f"tts_{i:05d}.mp3"
-        tts_wav = work / f"tts_{i:05d}.wav"
-        asyncio.run(synthesize(clean_text, voice, tts_mp3))
-        spoken = duration(tts_mp3)
-        filters = []
-        if spoken > desired * 1.03:
-            filters.append(atempo_chain(spoken / desired))
-        filters += ["aresample=24000", "aformat=sample_fmts=s16:channel_layouts=mono"]
-        run([
-            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(tts_mp3),
-            "-af", ",".join(filters), "-ac", "1", "-ar", "24000", str(tts_wav),
-        ])
-        clip = AudioSegment.from_file(tts_wav).set_frame_rate(24000).set_channels(1).set_sample_width(2)
-        max_len = max(120, int(desired * 1000))
-        if len(clip) > max_len:
-            clip = clip[:max_len]
-        timeline = timeline.overlay(clip, position=int(start * 1000))
+        plans.append({
+            "i": i,
+            "start": start,
+            "end": end,
+            "desired": desired,
+            "text": clean_text,
+            "voice": voice,
+            "mp3": work / f"tts_{i:05d}.mp3",
+            "wav": work / f"tts_{i:05d}.wav",
+        })
         previous_end = end
         subtitles.append(srt.Subtitle(
             index=len(subtitles) + 1,
@@ -239,24 +254,72 @@ def main() -> None:
             end=timedelta(seconds=end),
             content=clean_text,
         ))
-        tts_mp3.unlink(missing_ok=True)
-        tts_wav.unlink(missing_ok=True)
+
+    if plans:
+        asyncio.run(synthesize_many(plans, concurrency=4 if mode != "quality" else 3))
+
+    successful_tts = 0
+    for n, plan in enumerate(plans, 1):
+        if not plan.get("tts_ok"):
+            print(f"TTS segment {plan['i']} skipped: {plan.get('tts_error', 'unknown error')}", flush=True)
+            continue
+        try:
+            clip = AudioSegment.from_file(plan["mp3"])
+            spoken = max(0.001, len(clip) / 1000.0)
+            if spoken > plan["desired"] * 1.03:
+                filters = [
+                    atempo_chain(spoken / plan["desired"]),
+                    "aresample=24000",
+                    "aformat=sample_fmts=s16:channel_layouts=mono",
+                ]
+                run([
+                    "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(plan["mp3"]),
+                    "-af", ",".join(filters), "-ac", "1", "-ar", "24000", str(plan["wav"]),
+                ])
+                clip = AudioSegment.from_file(plan["wav"])
+            clip = clip.set_frame_rate(24000).set_channels(1).set_sample_width(2)
+            max_len = max(120, int(plan["desired"] * 1000))
+            if len(clip) > max_len:
+                clip = clip[:max_len]
+            timeline = timeline.overlay(clip, position=int(plan["start"] * 1000))
+            successful_tts += 1
+        except Exception as exc:
+            print(f"TTS render segment {plan['i']} skipped: {exc}", flush=True)
+        finally:
+            plan["mp3"].unlink(missing_ok=True)
+            plan["wav"].unlink(missing_ok=True)
+
+        if plans and (n % max(1, len(plans) // 4) == 0 or n == len(plans)):
+            client.patch_job(
+                job_id,
+                progress=min(24, 18 + round((n / len(plans)) * 6)),
+                stage=f"สร้างเสียงช่วง {args.index + 1}/{args.total} · {n}/{len(plans)} ประโยค",
+            )
+
+    if plans and successful_tts == 0:
+        raise RuntimeError("สร้างเสียงพากย์ไม่สำเร็จทุกประโยค กรุณาลองใหม่")
 
     timeline.export(dubbed_wav, format="wav")
+    if not has_audio(dubbed_wav):
+        raise RuntimeError("ไฟล์เสียงพากย์ไม่มี audio stream")
     subtitle_path.write_text(srt.compose(subtitles), encoding="utf-8")
 
+    client.patch_job(job_id, progress=25, stage=f"กำลังผสมเสียงช่วง {args.index + 1}/{args.total}")
     keep_music = bool(job.get("keepMusic", True))
     common_video = [
         "-vf", "scale=-2:'min(1080,ih)'",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-pix_fmt", "yuv420p",
+        "-c:v", "libx264", "-preset", "ultrafast" if mode == "fast" else "veryfast",
+        "-crf", "23" if mode == "fast" else "22", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-f", "mpegts",
     ]
     if keep_music:
+        # The dubbed voice must be split before it is consumed twice: once as the
+        # side-chain control signal and once as the audible voice mixed back in.
         filter_complex = (
             "[0:a:0]aresample=48000,volume=0.95[base];"
-            "[1:a:0]aresample=48000[voice];"
-            "[base][voice]sidechaincompress=threshold=0.025:ratio=10:attack=8:release=280[ducked];"
-            "[ducked][voice]amix=inputs=2:weights='1 1.15':normalize=0[aout]"
+            "[1:a:0]aresample=48000,asplit=2[voice_sc][voice_mix];"
+            "[base][voice_sc]sidechaincompress=threshold=0.025:ratio=10:attack=8:release=280[ducked];"
+            "[ducked][voice_mix]amix=inputs=2:weights='1 1.15':normalize=0[aout]"
         )
         run([
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
@@ -271,6 +334,9 @@ def main() -> None:
             "-map", "0:v:0", "-map", "1:a:0", *common_video, str(output),
         ])
 
+    if not output.exists() or output.stat().st_size <= 0:
+        raise RuntimeError("FFmpeg did not produce a dubbed video chunk")
+
     out_key = f"temp/{job_id}/dub/chunk_{args.index:05d}.ts"
     sub_key = f"temp/{job_id}/subs/chunk_{args.index:05d}.srt"
     meta_key = f"temp/{job_id}/meta/chunk_{args.index:05d}.json"
@@ -278,6 +344,7 @@ def main() -> None:
         "index": args.index,
         "duration": chunk_duration,
         "segments": len(whisper_segments),
+        "ttsSegments": successful_tts,
         "detectedLanguage": detected_lang,
         "targetLanguage": target_lang,
         "outputKey": out_key,
