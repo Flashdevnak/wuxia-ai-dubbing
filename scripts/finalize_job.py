@@ -4,6 +4,7 @@ import argparse
 import json
 import subprocess
 import threading
+import xml.etree.ElementTree as ET
 from datetime import timedelta
 from pathlib import Path
 
@@ -58,6 +59,20 @@ def run_ffmpeg_to_drive(client: WorkerClient, cmd: list[str], output_key: str) -
     if int(upload_result.get("size") or 0) <= 0:
         raise RuntimeError("ไฟล์วิดีโอผลลัพธ์มีขนาด 0 ไบต์")
     return upload_result
+
+
+def subtitles_to_transcript_xml(items: list[srt.Subtitle]) -> str:
+    """Export the final translated timing as YouTube-style transcript XML."""
+    root = ET.Element("transcript")
+    for item in items:
+        start = max(0.0, item.start.total_seconds())
+        dur = max(0.05, (item.end - item.start).total_seconds())
+        node = ET.SubElement(root, "text", {
+            "start": f"{start:.3f}".rstrip("0").rstrip("."),
+            "dur": f"{dur:.3f}".rstrip("0").rstrip("."),
+        })
+        node.text = str(item.content or "").strip()
+    return ET.tostring(root, encoding="unicode")
 
 
 def main() -> None:
@@ -125,11 +140,26 @@ def main() -> None:
         )
 
     subtitle_key = None
+    transcript_xml_key = None
     if bool(job.get("subtitles", True)):
         final_srt = work / f"dub_{target}.srt"
         final_srt.write_text(srt.compose(all_subs), encoding="utf-8")
         subtitle_key = f"outputs/{job_id}/dub_{target}.srt"
         client.upload(final_srt, subtitle_key, "application/x-subrip")
+
+        # This is the translated transcript actually used by the dub, in the
+        # same <text start="..." dur="..."> format commonly exported from
+        # YouTube caption tools.
+        final_xml = work / f"dub_{target}.xml"
+        final_xml.write_text(subtitles_to_transcript_xml(all_subs), encoding="utf-8")
+        transcript_xml_key = f"outputs/{job_id}/dub_{target}.xml"
+        client.upload(final_xml, transcript_xml_key, "application/xml")
+        client.patch_job(
+            job_id,
+            transcriptXmlKey=transcript_xml_key,
+            transcriptLanguage=target,
+            transcriptSource="youtube" if job.get("sourceType") == "link" else "generated",
+        )
 
     if client.is_paused(job_id):
         print("Job paused before final video assembly", flush=True)
@@ -203,6 +233,7 @@ def main() -> None:
         "jobId": job_id,
         "outputKey": output_key,
         "subtitleKey": subtitle_key,
+        "transcriptXmlKey": transcript_xml_key,
         "duration": offset,
         "sizeBytes": size_bytes,
     }, ensure_ascii=False))
