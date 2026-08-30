@@ -19,8 +19,6 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
-          cache: npm
-          cache-dependency-path: package.json
 
       - name: Check required GitHub Secrets
         env:
@@ -38,8 +36,7 @@ jobs:
         run: npm install
 
       - name: Ensure R2 bucket exists
-        run: |
-          npx wrangler r2 bucket create wuxia-ai-dubbing-media || true
+        run: npx wrangler r2 bucket create wuxia-ai-dubbing-media || true
 
       - name: Deploy Worker + web assets
         run: npx wrangler deploy
