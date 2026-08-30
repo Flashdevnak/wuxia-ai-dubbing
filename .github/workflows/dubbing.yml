@@ -24,15 +24,21 @@ jobs:
       WORKER_SHARED_TOKEN: ${{ secrets.WORKER_SHARED_TOKEN }}
       YOUTUBE_COOKIES_B64: ${{ secrets.YOUTUBE_COOKIES_B64 }}
       JOB_JSON: ${{ toJson(github.event.client_payload.job) }}
+      CHUNK_SECONDS: ${{ github.event.client_payload.job.processingMode == 'quality' && '600' || github.event.client_payload.job.processingMode == 'balanced' && '420' || '300' }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+          cache: pip
       - name: Ensure ffmpeg
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y ffmpeg
+          if command -v ffmpeg >/dev/null 2>&1; then
+            ffmpeg -version | head -n 1
+          else
+            sudo apt-get update -qq
+            sudo apt-get install -y ffmpeg
+          fi
       - name: Install preparation dependencies
         run: pip install requests yt-dlp
       - name: Write job payload
@@ -42,13 +48,13 @@ jobs:
           pathlib.Path('job.json').write_text(os.environ['JOB_JSON'], encoding='utf-8')
           PY
       - id: prepare
-        name: Stream source and split into Google Drive chunks
+        name: Stream source and split into parallel chunks
         run: |
           python scripts/prepare_job.py \
             --job job.json \
             --worker-url "$WORKER_URL" \
             --token "$WORKER_SHARED_TOKEN" \
-            --chunk-seconds 1200 \
+            --chunk-seconds "$CHUNK_SECONDS" \
             --github-output "$GITHUB_OUTPUT"
 
   dub:
@@ -64,7 +70,7 @@ jobs:
       WORKER_URL: ${{ github.event.client_payload.workerBase || secrets.WORKER_URL }}
       WORKER_SHARED_TOKEN: ${{ secrets.WORKER_SHARED_TOKEN }}
       JOB_JSON: ${{ toJson(github.event.client_payload.job) }}
-      WHISPER_MODEL: small
+      WHISPER_MODEL: ${{ github.event.client_payload.job.processingMode == 'fast' && 'base' || 'small' }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -73,13 +79,19 @@ jobs:
           cache: pip
       - name: Ensure ffmpeg
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y ffmpeg
+          if command -v ffmpeg >/dev/null 2>&1; then
+            ffmpeg -version | head -n 1
+          else
+            sudo apt-get update -qq
+            sudo apt-get install -y ffmpeg
+          fi
       - name: Cache Whisper model
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface
-          key: whisper-small-${{ runner.os }}-v1
+          key: whisper-${{ env.WHISPER_MODEL }}-${{ runner.os }}-v2
+          restore-keys: |
+            whisper-${{ env.WHISPER_MODEL }}-${{ runner.os }}-
       - name: Install dubbing dependencies
         run: pip install -r requirements.txt
       - name: Write job payload
@@ -112,10 +124,15 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+          cache: pip
       - name: Ensure ffmpeg
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y ffmpeg
+          if command -v ffmpeg >/dev/null 2>&1; then
+            ffmpeg -version | head -n 1
+          else
+            sudo apt-get update -qq
+            sudo apt-get install -y ffmpeg
+          fi
       - name: Install finalizer dependencies
         run: pip install requests srt
       - name: Write job payload
@@ -155,7 +172,6 @@ jobs:
           job = json.loads(os.environ['JOB_JSON'])
           client = WorkerClient(os.environ['WORKER_URL'], os.environ['WORKER_SHARED_TOKEN'])
           current = client.get_job(job['id'])
-          # Preserve a specific error already written by prepare/dub/finalize.
           if not current.get('error'):
-              client.fail(job['id'], 'GitHub Actions pipeline failed. Open the workflow run log for the failed stage.')
+              client.fail(job['id'], 'ขั้นประมวลผลเสียงพากย์ไม่สำเร็จ กรุณาลองใหม่อีกครั้ง')
           PY
