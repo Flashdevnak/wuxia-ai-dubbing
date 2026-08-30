@@ -10,15 +10,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v6
         with:
           node-version: 24
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
       - name: JavaScript syntax check
         run: |
           node --check public/app.js
-          node --check src/worker.js
+          node --check src/worker-v2.js
+      - name: Python syntax check
+        run: |
+          python -m py_compile \
+            scripts/worker_client.py \
+            scripts/prepare_job.py \
+            scripts/dub_chunk.py \
+            scripts/finalize_job.py
       - name: Verify required files
         run: |
           test -f public/index.html
           test -f public/styles.css
           test -f wrangler.jsonc
+          test -f requirements.txt
+          test -f .github/workflows/dubbing.yml
+          test -f .github/workflows/deploy-cloudflare.yml
