@@ -58,7 +58,7 @@ jobs:
       - name: Install Wrangler
         run: npm install
 
-      - name: Deploy Fire Core 2.1 + web assets
+      - name: Deploy backend and web assets
         run: npx wrangler deploy
 
       - name: Set private Worker secrets
@@ -77,7 +77,7 @@ jobs:
           printf '%s' "$GOOGLE_CLIENT_SECRET" | npx wrangler secret put GOOGLE_CLIENT_SECRET
           printf '%s' "$GOOGLE_REFRESH_TOKEN" | npx wrangler secret put GOOGLE_REFRESH_TOKEN
 
-      - name: Smoke test multipart storage internal uploads and AI translation
+      - name: Smoke test storage uploads and translation
         env:
           ACCESS_KEY: ${{ secrets.WUXIA_ACCESS_KEY }}
           WORKER_TOKEN: ${{ secrets.WORKER_SHARED_TOKEN }}
@@ -135,18 +135,18 @@ jobs:
 
           health = request('/api/health')[2]
           assert health.get('driveReady'), health
-          assert health.get('core') == 'clean-v2.1', health
+          assert health.get('core') == 'clean-v2.2', health
           assert health.get('uploadMode') == 'same-origin-multipart', health
-          print('health clean-v2.1: OK')
+          print('health clean-v2.2: OK')
 
           translated = internal_json('/api/internal/translate', 'POST', {'texts': ['Hello, welcome.'], 'sourceLang': 'en', 'targetLang': 'th'})
           assert len(translated.get('translations') or []) == 1, translated
           assert str(translated['translations'][0]).strip(), translated
-          print('Workers AI translation JSON: OK')
+          print('translation: OK')
 
           part_size = 2 * 1024 * 1024
           source = b'A' * part_size + b'B' * part_size + b'C' * (1024 * 1024)
-          started = public_json('/api/uploads/start', 'POST', {'name': '__core21_public_smoke__.bin', 'size': len(source), 'type': 'application/octet-stream'})
+          started = public_json('/api/uploads/start', 'POST', {'name': '__core22_public_smoke__.bin', 'size': len(source), 'type': 'application/octet-stream'})
           assert int(started['partSize']) == part_size, started
           key, upload_id = started['key'], started['uploadId']
           for i in range(3):
@@ -162,10 +162,10 @@ jobs:
           downloaded = request('/api/files/download?' + q, expect_json=False)[2]
           assert downloaded == source
           public_json('/api/files?' + urllib.parse.urlencode({'key': key}), 'DELETE')
-          print('public multipart/resume/download: OK')
+          print('public upload/resume/download: OK')
 
           internal_source = b'I' * (3 * 1024 * 1024)
-          ikey = 'temp/__core21_internal_smoke__/known.bin'
+          ikey = 'temp/__core22_internal_smoke__/known.bin'
           istart = internal_json('/api/internal/uploads/start', 'POST', {'key': ikey, 'size': len(internal_source), 'type': 'application/octet-stream'})
           iq = urllib.parse.urlencode({'key': ikey, 'uploadId': istart['uploadId'], 'partNumber': 1})
           request('/api/internal/uploads/part?' + iq, 'PUT', internal_source, {'x-worker-token': worker_token, 'content-type': 'application/octet-stream', 'content-length': str(len(internal_source))})
@@ -177,7 +177,7 @@ jobs:
           print('internal known-size upload: OK')
 
           stream_source = b'S' * (1024 * 1024 + 777)
-          skey = 'temp/__core21_internal_smoke__/stream.bin'
+          skey = 'temp/__core22_internal_smoke__/stream.bin'
           sstart = internal_json('/api/internal/uploads/start', 'POST', {'key': skey, 'type': 'application/octet-stream'})
           sq = urllib.parse.urlencode({'key': skey, 'uploadId': sstart['uploadId'], 'partNumber': 1, 'finalTotal': len(stream_source)})
           request('/api/internal/uploads/part?' + sq, 'PUT', stream_source, {'x-worker-token': worker_token, 'content-type': 'application/octet-stream', 'content-length': str(len(stream_source))})
@@ -189,8 +189,8 @@ jobs:
 
       - name: Deployment summary
         run: |
-          echo '### Fire Core 2.1 deployed' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Crimson flame UI + sword progress bars' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Browser upload: same-origin multipart/form-data, resumable' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Workers AI translation JSON smoke passed' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Public and internal Google Drive upload smoke passed' >> "$GITHUB_STEP_SUMMARY"
+          echo '### Backend deployment passed' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Job pause, resume and retry controls enabled' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Browser resumable upload enabled' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Translation smoke test passed' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Google Drive upload smoke tests passed' >> "$GITHUB_STEP_SUMMARY"
