@@ -53,7 +53,7 @@ async function uploadFile(file){
     while(attempt<4&&!done){
       attempt++;
       try{
-        const r=await fetch(`${API_BASE}/api/uploads/part?key=${encodeURIComponent(key)}&uploadId=${encodeURIComponent(uploadId)}&partNumber=${i+1}`,{method:'PUT',headers:{'x-access-key':getAccessKey()},body:blob});
+        const r=await fetch(`${API_BASE}/api/uploads/part?key=${encodeURIComponent(key)}&uploadId=${encodeURIComponent(uploadId)}&partNumber=${i+1}`,{method:'POST',headers:{'x-access-key':getAccessKey()},body:blob,cache:'no-store'});
         const d=await r.json().catch(()=>({}));
         if(r.status===401){clearAccessKey();throw new Error('รหัสสำนักไม่ถูกต้อง');}
         if(!r.ok)throw new Error(d.error||'upload failed');
@@ -105,6 +105,6 @@ if(IS_GITHUB_PAGES&&!window.WUXIA_API_BASE){
   $('#topStorage').textContent='Preview';
   $('#homeJobs').textContent='Preview UI พร้อม · เปิด URL Cloudflare Worker หลัง Deploy เพื่ออัปโหลดและพากย์จริง';
 }else{
-  const badge=$('#deployMode'); if(badge) badge.textContent='Cloudflare + R2';
+  const badge=$('#deployMode'); if(badge) badge.textContent='Cloudflare + Google Drive';
   Promise.all([loadJobs(),loadFiles(),loadStorage()]); setInterval(loadJobs,15000);
 }
