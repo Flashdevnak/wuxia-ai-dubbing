@@ -12,23 +12,60 @@ from urllib.parse import quote
 from worker_client import WorkerClient
 
 
+class CommandError(RuntimeError):
+    pass
+
+
 def run_capture(cmd: list[str]) -> str:
-    p = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if p.returncode != 0:
+        stderr = (p.stderr or "").strip()
+        tail = "\n".join(stderr.splitlines()[-12:])
+        raise CommandError(
+            f"Command failed ({p.returncode}): {' '.join(shlex.quote(x) for x in cmd[:8])}\n{tail}"
+        )
     return p.stdout.strip()
 
 
 def yt_direct_url(url: str) -> str:
-    # Prefer a single-file format with both audio and video so the segmenter can
-    # stream it without first downloading the whole source to runner storage.
-    out = run_capture([
-        "yt-dlp", "--no-playlist", "-g",
-        "-f", "best[height<=1080][acodec!=none][vcodec!=none]/best[acodec!=none][vcodec!=none]/best",
-        url,
-    ])
-    urls = [line.strip() for line in out.splitlines() if line.strip()]
-    if not urls:
-        raise RuntimeError("yt-dlp did not return a playable URL")
-    return urls[0]
+    # YouTube regularly changes which clients/formats are available on datacenter
+    # IPs. Try a few progressive-format strategies so ffmpeg can stream one URL
+    # without downloading the entire source to the GitHub runner first.
+    attempts = [
+        [
+            "yt-dlp", "--no-playlist", "--no-warnings", "-g",
+            "-f", "best[height<=1080][acodec!=none][vcodec!=none]/best[acodec!=none][vcodec!=none]/best",
+            url,
+        ],
+        [
+            "yt-dlp", "--no-playlist", "--no-warnings",
+            "--extractor-args", "youtube:player_client=android_vr,web_safari",
+            "-g", "-f",
+            "best[height<=720][acodec!=none][vcodec!=none]/best[acodec!=none][vcodec!=none]/best",
+            url,
+        ],
+        [
+            "yt-dlp", "--no-playlist", "--no-warnings",
+            "--extractor-args", "youtube:player_client=tv,web",
+            "-g", "-f",
+            "best[height<=720][acodec!=none][vcodec!=none]/best[acodec!=none][vcodec!=none]/best",
+            url,
+        ],
+    ]
+    errors: list[str] = []
+    for idx, cmd in enumerate(attempts, start=1):
+        try:
+            out = run_capture(cmd)
+            urls = [line.strip() for line in out.splitlines() if line.strip()]
+            if urls:
+                print(f"yt-dlp source strategy {idx} succeeded")
+                return urls[0]
+            errors.append(f"strategy {idx}: yt-dlp returned no playable URL")
+        except Exception as exc:
+            msg = str(exc)
+            errors.append(f"strategy {idx}: {msg}")
+            print(f"yt-dlp strategy {idx} failed: {msg}", flush=True)
+    raise RuntimeError("Unable to open YouTube source. " + " | ".join(errors))
 
 
 def probe_duration(input_url: str, headers: str | None = None) -> float:
@@ -67,7 +104,15 @@ def main() -> None:
         source_url = str(job.get("sourceUrl") or "").strip()
         if not source_url:
             raise RuntimeError("Link job has no sourceUrl")
-        input_url = yt_direct_url(source_url)
+        try:
+            input_url = yt_direct_url(source_url)
+        except Exception as exc:
+            # Surface the real reason in the web UI instead of leaving the card at 1%.
+            message = str(exc)
+            if len(message) > 1200:
+                message = message[-1200:]
+            client.fail(job_id, "เปิดลิงก์ YouTube ไม่สำเร็จ: " + message)
+            raise
 
     duration = probe_duration(input_url, headers)
     work = Path("work_prepare")
