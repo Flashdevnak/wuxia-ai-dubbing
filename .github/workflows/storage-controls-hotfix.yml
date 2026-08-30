@@ -1,0 +1,80 @@
+name: Apply storage cleanup controls
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/storage-controls-hotfix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Add storage cleanup controls
+        shell: python
+        run: |
+          from pathlib import Path
+
+          # Worker: replace temp-only cleanup with category cleanup endpoints.
+          p = Path('src/worker.js')
+          s = p.read_text(encoding='utf-8')
+          old = """  if (p === '/api/cleanup/temp' && request.method === 'POST') {\n    const result = await deletePrefix(env, 'temp/');\n    return json({ ok: true, freedBytes: result.bytes, deleted: result.count });\n  }\n"""
+          new = """  const cleanup = p.match(/^\\/api\\/cleanup\\/(uploads|temp|outputs|all)$/);\n  if (cleanup && request.method === 'POST') {\n    const kind = cleanup[1];\n    const prefixes = kind === 'all'\n      ? ['uploads/', 'temp/', 'outputs/', '_state/', '_jobs/']\n      : kind === 'temp'\n        ? ['temp/', '_state/']\n        : [`${kind}/`];\n    let freedBytes = 0;\n    let deleted = 0;\n    for (const prefix of prefixes) {\n      const result = await deletePrefix(env, prefix);\n      freedBytes += Number(result.bytes || 0);\n      deleted += Number(result.count || 0);\n    }\n    return json({ ok: true, kind, freedBytes, deleted });\n  }\n"""
+          if old not in s:
+              raise SystemExit('worker cleanup block not found')
+          p.write_text(s.replace(old, new), encoding='utf-8')
+
+          # HTML: add controls for each storage category and full reset.
+          p = Path('public/index.html')
+          s = p.read_text(encoding='utf-8')
+          old = """<div class=\"panel storage-actions\"><button id=\"cleanupBtn\" class=\"btn danger\">ล้างไฟล์ชั่วคราว</button><small>ลบเฉพาะไฟล์ชั่วคราวของระบบ</small></div>"""
+          new = """<div class=\"panel storage-actions\"><h2>ล้างพื้นที่</h2><p class=\"storage-action-note\">เลือกเฉพาะส่วนที่ต้องการลบ ระบบจะแสดงขนาดก่อนลบ</p><div class=\"storage-delete-grid\"><button id=\"cleanupUploadsBtn\" class=\"btn ghost\">ลบต้นฉบับ</button><button id=\"cleanupBtn\" class=\"btn ghost\">ลบไฟล์ชั่วคราว</button><button id=\"cleanupOutputsBtn\" class=\"btn ghost\">ลบผลลัพธ์</button><button id=\"cleanupAllBtn\" class=\"btn danger\">ล้างทั้งหมด</button></div><small class=\"storage-warning\">ล้างทั้งหมดจะลบไฟล์และประวัติงานของระบบ การลบไม่สามารถย้อนกลับได้</small></div>"""
+          if old not in s:
+              raise SystemExit('storage actions html not found')
+          p.write_text(s.replace(old, new), encoding='utf-8')
+
+          # App: show cleanup sizes in buttons.
+          p = Path('public/app.js')
+          s = p.read_text(encoding='utf-8')
+          old = """    if ($('#stTotal')) $('#stTotal').textContent = fmtBytes(d.bytes);\n    if ($('#stUpload')) $('#stUpload').textContent = fmtBytes(g.uploads);\n    if ($('#stTemp')) $('#stTemp').textContent = fmtBytes(g.temp);\n    if ($('#stOutput')) $('#stOutput').textContent = fmtBytes(g.outputs);\n"""
+          new = """    if ($('#stTotal')) $('#stTotal').textContent = fmtBytes(d.bytes);\n    if ($('#stUpload')) $('#stUpload').textContent = fmtBytes(g.uploads);\n    if ($('#stTemp')) $('#stTemp').textContent = fmtBytes(g.temp);\n    if ($('#stOutput')) $('#stOutput').textContent = fmtBytes(g.outputs);\n    const cleanupButtons = [\n      ['#cleanupUploadsBtn', 'ลบต้นฉบับ', Number(g.uploads || 0)],\n      ['#cleanupBtn', 'ลบไฟล์ชั่วคราว', Number(g.temp || 0)],\n      ['#cleanupOutputsBtn', 'ลบผลลัพธ์', Number(g.outputs || 0)],\n      ['#cleanupAllBtn', 'ล้างทั้งหมด', Number(d.bytes || 0)],\n    ];\n    for (const [selector, label, bytes] of cleanupButtons) {\n      const btn = $(selector);\n      if (!btn) continue;\n      btn.textContent = `${label} (${fmtBytes(bytes)})`;\n      btn.disabled = bytes <= 0;\n    }\n"""
+          if old not in s:
+              raise SystemExit('storage load block not found')
+          s = s.replace(old, new)
+
+          old = """  $('#cleanupBtn')?.addEventListener('click', async () => {\n    showLoader('กำลังล้างไฟล์ชั่วคราว', 'กำลังคืนพื้นที่', 35);\n    try {\n      await api('/api/cleanup/temp', { method: 'POST', body: '{}' });\n      updateLoader('ล้างไฟล์ชั่วคราวแล้ว', 100);\n      await loadStorage();\n    } finally { setTimeout(hideLoader, 420); }\n  });\n"""
+          new = """  const cleanupActions = [\n    ['#cleanupUploadsBtn', 'uploads', 'ไฟล์ต้นฉบับ', 'ลบไฟล์ต้นฉบับทั้งหมดหรือไม่? งานที่ยังต้องใช้ต้นฉบับอาจทำต่อไม่ได้'],\n    ['#cleanupBtn', 'temp', 'ไฟล์ชั่วคราว', 'ลบไฟล์ชั่วคราวทั้งหมดหรือไม่? งานที่กำลังทำอยู่ควรหยุดให้เรียบร้อยก่อน'],\n    ['#cleanupOutputsBtn', 'outputs', 'ไฟล์ผลลัพธ์', 'ลบไฟล์ผลลัพธ์ทั้งหมดหรือไม่? ไฟล์ที่ยังไม่ได้ดาวน์โหลดจะหายไป'],\n    ['#cleanupAllBtn', 'all', 'ไฟล์ทั้งหมด', 'ล้างไฟล์และประวัติงานทั้งหมดหรือไม่? การกระทำนี้ย้อนกลับไม่ได้'],\n  ];\n  for (const [selector, kind, label, question] of cleanupActions) {\n    $(selector)?.addEventListener('click', async () => {\n      if (!confirm(question)) return;\n      showLoader(`กำลังลบ${label}`, 'กำลังคืนพื้นที่', 35);\n      try {\n        const result = await api(`/api/cleanup/${kind}`, { method: 'POST', body: '{}' });\n        updateLoader(`ลบแล้ว คืนพื้นที่ ${fmtBytes(result.freedBytes)}`, 100);\n        if (kind === 'uploads' || kind === 'all') state.sourceKey = null;\n        if (kind === 'all') state.progressFloor = {};\n        await Promise.all([loadJobs(), loadFiles(), loadStorage()]);\n      } catch (err) {\n        updateLoader(err.message || 'ลบไฟล์ไม่สำเร็จ', 100);\n      } finally {\n        setTimeout(hideLoader, 650);\n      }\n    });\n  }\n"""
+          if old not in s:
+              raise SystemExit('cleanup button handler not found')
+          p.write_text(s.replace(old, new), encoding='utf-8')
+
+          # CSS: compact responsive button grid.
+          p = Path('public/styles.css')
+          s = p.read_text(encoding='utf-8')
+          marker = '/* storage-cleanup-controls-v1 */'
+          if marker not in s:
+              s += """\n\n/* storage-cleanup-controls-v1 */\n.storage-actions h2{margin:0 0 6px}.storage-action-note{margin:0 0 16px;opacity:.78}.storage-delete-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.storage-delete-grid .btn{width:100%;min-height:52px}.storage-delete-grid .btn:disabled{opacity:.38;filter:grayscale(.5);cursor:not-allowed}.storage-warning{display:block;margin-top:14px;line-height:1.55;opacity:.72}@media(max-width:680px){.storage-delete-grid{grid-template-columns:1fr}.storage-delete-grid .btn{min-height:56px}}\n"""
+              p.write_text(s, encoding='utf-8')
+
+      - name: Validate patched files
+        run: |
+          node --check public/app.js
+          node --check src/worker.js
+          grep -q "cleanupUploadsBtn" public/index.html
+          grep -q "cleanupOutputsBtn" public/index.html
+          grep -q "cleanupAllBtn" public/index.html
+          grep -q "api/cleanup" public/app.js
+
+      - name: Commit permanent changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm .github/workflows/storage-controls-hotfix.yml
+          git add src/worker.js public/index.html public/app.js public/styles.css .github/workflows/storage-controls-hotfix.yml
+          git commit -m "Add storage cleanup controls"
+          git push
