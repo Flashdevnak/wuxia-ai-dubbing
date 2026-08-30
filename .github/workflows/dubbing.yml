@@ -1,0 +1,157 @@
+name: AI Dubbing Pipeline
+
+on:
+  repository_dispatch:
+    types: [dubbing_job]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dubbing-${{ github.event.client_payload.job.id }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    outputs:
+      matrix: ${{ steps.prepare.outputs.matrix }}
+      total: ${{ steps.prepare.outputs.total }}
+      duration: ${{ steps.prepare.outputs.duration }}
+    env:
+      WORKER_URL: ${{ github.event.client_payload.workerBase || secrets.WORKER_URL }}
+      WORKER_SHARED_TOKEN: ${{ secrets.WORKER_SHARED_TOKEN }}
+      JOB_JSON: ${{ toJson(github.event.client_payload.job) }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Ensure ffmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+      - name: Install preparation dependencies
+        run: pip install requests yt-dlp
+      - name: Write job payload
+        run: |
+          python - <<'PY'
+          import os, pathlib
+          pathlib.Path('job.json').write_text(os.environ['JOB_JSON'], encoding='utf-8')
+          PY
+      - id: prepare
+        name: Stream source and split into R2 chunks
+        run: |
+          python scripts/prepare_job.py \
+            --job job.json \
+            --worker-url "$WORKER_URL" \
+            --token "$WORKER_SHARED_TOKEN" \
+            --chunk-seconds 1200 \
+            --github-output "$GITHUB_OUTPUT"
+
+  dub:
+    needs: prepare
+    if: ${{ needs.prepare.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+    env:
+      WORKER_URL: ${{ github.event.client_payload.workerBase || secrets.WORKER_URL }}
+      WORKER_SHARED_TOKEN: ${{ secrets.WORKER_SHARED_TOKEN }}
+      JOB_JSON: ${{ toJson(github.event.client_payload.job) }}
+      WHISPER_MODEL: small
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Ensure ffmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+      - name: Cache Whisper model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: whisper-small-${{ runner.os }}-v1
+      - name: Install dubbing dependencies
+        run: pip install -r requirements.txt
+      - name: Write job payload
+        run: |
+          python - <<'PY'
+          import os, pathlib
+          pathlib.Path('job.json').write_text(os.environ['JOB_JSON'], encoding='utf-8')
+          PY
+      - name: Dub chunk ${{ matrix.index }}
+        run: |
+          python scripts/dub_chunk.py \
+            --job job.json \
+            --worker-url "$WORKER_URL" \
+            --token "$WORKER_SHARED_TOKEN" \
+            --index '${{ matrix.index }}' \
+            --key '${{ matrix.key }}' \
+            --total '${{ matrix.total }}'
+
+  finalize:
+    needs: [prepare, dub]
+    if: ${{ needs.prepare.result == 'success' && needs.dub.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      WORKER_URL: ${{ github.event.client_payload.workerBase || secrets.WORKER_URL }}
+      WORKER_SHARED_TOKEN: ${{ secrets.WORKER_SHARED_TOKEN }}
+      JOB_JSON: ${{ toJson(github.event.client_payload.job) }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Ensure ffmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+      - name: Install finalizer dependencies
+        run: pip install requests srt
+      - name: Write job payload
+        run: |
+          python - <<'PY'
+          import os, pathlib
+          pathlib.Path('job.json').write_text(os.environ['JOB_JSON'], encoding='utf-8')
+          PY
+      - name: Stream-concatenate and upload final MP4
+        run: |
+          python scripts/finalize_job.py \
+            --job job.json \
+            --worker-url "$WORKER_URL" \
+            --token "$WORKER_SHARED_TOKEN" \
+            --total '${{ needs.prepare.outputs.total }}'
+
+  mark-failed:
+    needs: [prepare, dub, finalize]
+    if: ${{ always() && (needs.prepare.result == 'failure' || needs.dub.result == 'failure' || needs.finalize.result == 'failure') }}
+    runs-on: ubuntu-latest
+    env:
+      WORKER_URL: ${{ github.event.client_payload.workerBase || secrets.WORKER_URL }}
+      WORKER_SHARED_TOKEN: ${{ secrets.WORKER_SHARED_TOKEN }}
+      JOB_JSON: ${{ toJson(github.event.client_payload.job) }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: pip install requests
+      - name: Mark job failed
+        run: |
+          python - <<'PY'
+          import json, os, sys
+          sys.path.insert(0, 'scripts')
+          from worker_client import WorkerClient
+          job = json.loads(os.environ['JOB_JSON'])
+          client = WorkerClient(os.environ['WORKER_URL'], os.environ['WORKER_SHARED_TOKEN'])
+          client.fail(job['id'], 'GitHub Actions pipeline failed. Open the workflow run log for the failed stage.')
+          PY
