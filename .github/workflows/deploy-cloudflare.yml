@@ -123,19 +123,19 @@ jobs:
           parts = []
           first = b'A' * part_size
           q1 = urllib.parse.urlencode({'key': key, 'uploadId': upload_id, 'partNumber': 1})
-          _, p1 = call('/api/uploads/part?' + q1, 'PUT', first, {'content-type': 'application/octet-stream'})
+          _, p1 = call('/api/uploads/part?' + q1, 'POST', first, {'content-type': 'application/octet-stream'})
           if p1.get('complete'):
               raise RuntimeError(f'First chunk completed unexpectedly: {p1}')
           parts.append({'partNumber': 1, 'etag': p1.get('etag')})
-          print('upload chunk 1/2: OK (resume incomplete handled)')
+          print('upload chunk 1/2 via POST: OK (resume incomplete handled)')
 
           second = b'B' * (size - part_size)
           q2 = urllib.parse.urlencode({'key': key, 'uploadId': upload_id, 'partNumber': 2})
-          _, p2 = call('/api/uploads/part?' + q2, 'PUT', second, {'content-type': 'application/octet-stream'})
+          _, p2 = call('/api/uploads/part?' + q2, 'POST', second, {'content-type': 'application/octet-stream'})
           if not p2.get('complete'):
               raise RuntimeError(f'Final chunk did not complete: {p2}')
           parts.append({'partNumber': 2, 'etag': p2.get('etag')})
-          print('upload chunk 2/2: OK')
+          print('upload chunk 2/2 via POST: OK')
 
           _, done = call('/api/uploads/complete', 'POST', {'key': key, 'uploadId': upload_id, 'parts': parts})
           if int(done.get('size', -1)) != size:
@@ -156,4 +156,4 @@ jobs:
           echo '- Storage: Google Drive (`Wuxia AI Dubbing` folder)' >> "$GITHUB_STEP_SUMMARY"
           echo '- R2: removed / not required' >> "$GITHUB_STEP_SUMMARY"
           echo '- Workers AI translation binding: `AI`' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Real 5 MiB / 2-chunk resumable upload smoke test: passed' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Real 5 MiB / 2-chunk POST resumable upload smoke test: passed' >> "$GITHUB_STEP_SUMMARY"
