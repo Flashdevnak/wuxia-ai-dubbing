@@ -395,6 +395,18 @@ async function loadStorage() {
     if ($('#stUpload')) $('#stUpload').textContent = fmtBytes(g.uploads);
     if ($('#stTemp')) $('#stTemp').textContent = fmtBytes(g.temp);
     if ($('#stOutput')) $('#stOutput').textContent = fmtBytes(g.outputs);
+    const cleanupButtons = [
+      ['#cleanupUploadsBtn', 'ลบต้นฉบับ', Number(g.uploads || 0)],
+      ['#cleanupBtn', 'ลบไฟล์ชั่วคราว', Number(g.temp || 0)],
+      ['#cleanupOutputsBtn', 'ลบผลลัพธ์', Number(g.outputs || 0)],
+      ['#cleanupAllBtn', 'ล้างทั้งหมด', Number(d.bytes || 0)],
+    ];
+    for (const [selector, label, bytes] of cleanupButtons) {
+      const btn = $(selector);
+      if (!btn) continue;
+      btn.textContent = `${label} (${fmtBytes(bytes)})`;
+      btn.disabled = bytes <= 0;
+    }
   } catch (e) { console.warn(e); }
 }
 
@@ -442,14 +454,29 @@ function bind() {
     catch (e) { hideLoader(); $('#message').textContent = e.message; }
   });
   $('#refreshBtn')?.addEventListener('click', () => Promise.all([loadJobs(), loadFiles(), loadStorage()]));
-  $('#cleanupBtn')?.addEventListener('click', async () => {
-    showLoader('กำลังล้างไฟล์ชั่วคราว', 'กำลังคืนพื้นที่', 35);
-    try {
-      await api('/api/cleanup/temp', { method: 'POST', body: '{}' });
-      updateLoader('ล้างไฟล์ชั่วคราวแล้ว', 100);
-      await loadStorage();
-    } finally { setTimeout(hideLoader, 420); }
-  });
+  const cleanupActions = [
+    ['#cleanupUploadsBtn', 'uploads', 'ไฟล์ต้นฉบับ', 'ลบไฟล์ต้นฉบับทั้งหมดหรือไม่? งานที่ยังต้องใช้ต้นฉบับอาจทำต่อไม่ได้'],
+    ['#cleanupBtn', 'temp', 'ไฟล์ชั่วคราว', 'ลบไฟล์ชั่วคราวทั้งหมดหรือไม่? งานที่กำลังทำอยู่ควรหยุดให้เรียบร้อยก่อน'],
+    ['#cleanupOutputsBtn', 'outputs', 'ไฟล์ผลลัพธ์', 'ลบไฟล์ผลลัพธ์ทั้งหมดหรือไม่? ไฟล์ที่ยังไม่ได้ดาวน์โหลดจะหายไป'],
+    ['#cleanupAllBtn', 'all', 'ไฟล์ทั้งหมด', 'ล้างไฟล์และประวัติงานทั้งหมดหรือไม่? การกระทำนี้ย้อนกลับไม่ได้'],
+  ];
+  for (const [selector, kind, label, question] of cleanupActions) {
+    $(selector)?.addEventListener('click', async () => {
+      if (!confirm(question)) return;
+      showLoader(`กำลังลบ${label}`, 'กำลังคืนพื้นที่', 35);
+      try {
+        const result = await api(`/api/cleanup/${kind}`, { method: 'POST', body: '{}' });
+        updateLoader(`ลบแล้ว คืนพื้นที่ ${fmtBytes(result.freedBytes)}`, 100);
+        if (kind === 'uploads' || kind === 'all') state.sourceKey = null;
+        if (kind === 'all') state.progressFloor = {};
+        await Promise.all([loadJobs(), loadFiles(), loadStorage()]);
+      } catch (err) {
+        updateLoader(err.message || 'ลบไฟล์ไม่สำเร็จ', 100);
+      } finally {
+        setTimeout(hideLoader, 650);
+      }
+    });
+  }
 
   document.body.addEventListener('click', async e => {
     const dl = e.target.closest('[data-file]');

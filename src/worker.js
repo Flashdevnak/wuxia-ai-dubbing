@@ -618,9 +618,22 @@ async function handleApi(request, env, url) {
     }
   }
 
-  if (p === '/api/cleanup/temp' && request.method === 'POST') {
-    const result = await deletePrefix(env, 'temp/');
-    return json({ ok: true, freedBytes: result.bytes, deleted: result.count });
+  const cleanup = p.match(/^\/api\/cleanup\/(uploads|temp|outputs|all)$/);
+  if (cleanup && request.method === 'POST') {
+    const kind = cleanup[1];
+    const prefixes = kind === 'all'
+      ? ['uploads/', 'temp/', 'outputs/', '_state/', '_jobs/']
+      : kind === 'temp'
+        ? ['temp/', '_state/']
+        : [`${kind}/`];
+    let freedBytes = 0;
+    let deleted = 0;
+    for (const prefix of prefixes) {
+      const result = await deletePrefix(env, prefix);
+      freedBytes += Number(result.bytes || 0);
+      deleted += Number(result.count || 0);
+    }
+    return json({ ok: true, kind, freedBytes, deleted });
   }
 
   return json({ error: 'not found' }, 404);
