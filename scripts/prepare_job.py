@@ -29,11 +29,7 @@ def run_capture(cmd: list[str]) -> str:
 
 
 def build_cookie_file() -> Path | None:
-    """Decode an optional Netscape cookies.txt supplied through a GitHub secret.
-
-    The secret is base64-encoded so multiline cookie files survive GitHub Actions
-    environment handling without being printed to logs.
-    """
+    """Decode an optional Netscape cookies.txt supplied through a GitHub secret."""
     raw = (os.environ.get("YOUTUBE_COOKIES_B64") or "").strip()
     if not raw:
         return None
@@ -54,9 +50,6 @@ def build_cookie_file() -> Path | None:
 
 
 def yt_direct_url(url: str, cookies_file: Path | None = None) -> str:
-    # YouTube often blocks datacenter IPs used by GitHub-hosted runners. Try a few
-    # progressive-format clients. If the owner supplied a cookies.txt secret, use
-    # it for all attempts without ever printing its contents.
     cookie_args = ["--cookies", str(cookies_file)] if cookies_file else []
     attempts = [
         [
@@ -124,6 +117,21 @@ def probe_duration(input_url: str, headers: str | None = None) -> float:
         return 0.0
 
 
+def emit_outputs(manifest: dict, github_output: str | None) -> None:
+    chunks = list(manifest.get("chunks") or [])
+    total = int(manifest.get("total") or len(chunks))
+    if total < 1 or len(chunks) != total:
+        raise RuntimeError("Prepared manifest is incomplete")
+    matrix = {"include": [{"index": int(c["index"]), "key": str(c["key"]), "total": total} for c in chunks]}
+    output = json.dumps(matrix, separators=(",", ":"))
+    print("MATRIX_JSON=" + output)
+    if github_output:
+        with open(github_output, "a", encoding="utf-8") as f:
+            f.write("matrix=" + output + "\n")
+            f.write("total=" + str(total) + "\n")
+            f.write("duration=" + str(float(manifest.get("duration") or 0)) + "\n")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--job", required=True, help="Job JSON file")
@@ -136,7 +144,35 @@ def main() -> None:
     job = json.loads(Path(args.job).read_text(encoding="utf-8"))
     job_id = job["id"]
     client = WorkerClient(args.worker_url, args.token)
-    client.patch_job(job_id, status="processing", progress=3, stage="กำลังเตรียมวิดีโอและแบ่งช่วง")
+    client.patch_job(job_id, status="processing", progress=3, stage="กำลังเตรียมวิดีโอ")
+
+    work = Path("work_prepare")
+    work.mkdir(parents=True, exist_ok=True)
+    manifest_path = work / "manifest.json"
+    manifest_key = f"temp/{job_id}/manifest.json"
+
+    # Retry/resume: if the source was already split successfully, reuse it. This
+    # avoids starting a long video from the beginning after a later-stage error.
+    try:
+        if client.exists(manifest_key):
+            client.download(manifest_key, manifest_path)
+            previous = json.loads(manifest_path.read_text(encoding="utf-8"))
+            previous_chunks = list(previous.get("chunks") or [])
+            if previous_chunks and all(client.exists(str(c.get("key") or "")) for c in previous_chunks):
+                total = int(previous.get("total") or len(previous_chunks))
+                client.patch_job(
+                    job_id,
+                    status="processing",
+                    progress=10,
+                    stage=f"ใช้วิดีโอที่แบ่งไว้แล้ว {total} ช่วง",
+                    duration=float(previous.get("duration") or 0),
+                    chunkTotal=total,
+                )
+                print(f"Reusing prepared manifest with {total} chunks", flush=True)
+                emit_outputs(previous, args.github_output)
+                return
+    except Exception as exc:
+        print(f"Prepared manifest cannot be reused: {exc}", flush=True)
 
     headers = None
     if job.get("sourceType") == "upload":
@@ -153,8 +189,6 @@ def main() -> None:
             cookies_file = build_cookie_file()
             input_url = yt_direct_url(source_url, cookies_file)
         except Exception as exc:
-            # Surface a concise, actionable reason in the web UI instead of a raw
-            # yt-dlp traceback that can fill the whole mobile job card.
             message = str(exc)
             if len(message) > 900:
                 message = message[-900:]
@@ -162,7 +196,6 @@ def main() -> None:
             raise
 
     duration = probe_duration(input_url, headers)
-    work = Path("work_prepare")
     chunks_dir = work / "chunks"
     chunks_dir.mkdir(parents=True, exist_ok=True)
     pattern = str(chunks_dir / "chunk_%05d.mkv")
@@ -194,7 +227,6 @@ def main() -> None:
                 return
             if not final_pass and not following.exists():
                 return
-            # Once the next segment exists, ffmpeg has closed the current one.
             size = current.stat().st_size
             if size <= 0:
                 return
@@ -232,27 +264,17 @@ def main() -> None:
         "keepMusic": bool(job.get("keepMusic", True)),
         "speakerSeparation": bool(job.get("speakerSeparation", False)),
     }
-    manifest_path = work / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    manifest_key = f"temp/{job_id}/manifest.json"
     client.upload(manifest_path, manifest_key, "application/json")
     client.patch_job(
         job_id,
         status="processing",
         progress=10,
-        stage=f"แบ่งวิดีโอเสร็จ {total} ช่วง · เริ่มพากย์",
+        stage=f"แบ่งวิดีโอเสร็จ {total} ช่วง เริ่มพากย์",
         duration=duration,
         chunkTotal=total,
     )
-
-    matrix = {"include": [{"index": c["index"], "key": c["key"], "total": total} for c in uploaded]}
-    output = json.dumps(matrix, separators=(",", ":"))
-    print("MATRIX_JSON=" + output)
-    if args.github_output:
-        with open(args.github_output, "a", encoding="utf-8") as f:
-            f.write("matrix=" + output + "\n")
-            f.write("total=" + str(total) + "\n")
-            f.write("duration=" + str(duration) + "\n")
+    emit_outputs(manifest, args.github_output)
 
 
 if __name__ == "__main__":
