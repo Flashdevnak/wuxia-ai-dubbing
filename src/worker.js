@@ -370,34 +370,42 @@ async function handleInternal(request, env, url) {
     return json({ translations });
   }
 
-  if (p === '/api/internal/complete' && request.method === 'POST') {
-    const body = await request.json();
-    const job = await readJob(env, body.jobId);
-    if (!job) return json({ error: 'not found' }, 404);
-    job.status = 'completed';
-    job.pauseRequested = false;
-    job.progress = 100;
-    job.stage = 'เสร็จสมบูรณ์';
-    job.outputKey = body.outputKey || job.outputKey;
-    job.subtitleKey = body.subtitleKey || job.subtitleKey;
-    job.duration = body.duration || job.duration;
-    job.sizeBytes = body.sizeBytes || job.sizeBytes;
-    job.error = null;
-    await writeJob(env, job);
-    let freedBytes = 0;
-    if (job.autoCleanup) {
-      freedBytes += (await deletePrefix(env, `temp/${job.id}/`)).bytes;
-      freedBytes += (await deletePrefix(env, `_state/${job.id}/`)).bytes;
-      if (job.sourceType === 'upload' && body.deleteSource === true && job.sourceKey) {
-        freedBytes += await deleteLogical(env, job.sourceKey);
-        job.sourceKey = null;
-        await writeJob(env, job);
-      }
-    }
-    return json({ ok: true, job, freedBytes });
-  }
+if (p === '/api/internal/complete' && request.method === 'POST') {
+  const body = await request.json();
+  const job = await readJob(env, body.jobId);
+  if (!job) return json({ error: 'not found' }, 404);
+  job.status = 'completed';
+  job.pauseRequested = false;
+  job.progress = 100;
+  job.stage = 'เสร็จสมบูรณ์';
+  job.outputKey = body.outputKey || job.outputKey;
+  job.subtitleKey = body.subtitleKey || job.subtitleKey;
+  job.duration = body.duration || job.duration;
+  job.sizeBytes = body.sizeBytes || job.sizeBytes;
+  job.error = null;
+  job.cleanupPending = job.autoCleanup === true;
+  await writeJob(env, job);
+  return json({ ok: true, job, freedBytes: 0, cleanupPending: job.cleanupPending });
+}
 
-  if (p === '/api/internal/fail' && request.method === 'POST') {
+if (p === '/api/internal/cleanup-job' && request.method === 'POST') {
+  const body = await request.json();
+  const jobId = String(body.jobId || '');
+  const kind = String(body.kind || '');
+  if (!jobId || !['temp', 'state'].includes(kind)) return json({ error: 'invalid cleanup request' }, 400);
+  const prefix = kind === 'temp' ? `temp/${jobId}/` : `_state/${jobId}/`;
+  const result = await deletePrefix(env, prefix, 12);
+  if (kind === 'state' && Number(result.remaining || 0) === 0) {
+    const job = await readJob(env, jobId);
+    if (job) {
+      job.cleanupPending = false;
+      await writeJob(env, job);
+    }
+  }
+  return json({ ok: true, kind, ...result });
+}
+
+if (p === '/api/internal/fail'  && request.method === 'POST') {
     const body = await request.json();
     const job = await readJob(env, body.jobId);
     if (!job) return json({ error: 'not found' }, 404);
@@ -434,7 +442,7 @@ async function handleApi(request, env, url) {
       ok: true,
       app: env.APP_NAME || 'Wuxia AI Dubbing',
       backend: 'google-drive',
-      core: 'clean-v2.2',
+      core: 'clean-v2.3',
       uploadMode: 'same-origin-multipart',
       publicPartSize: PUBLIC_PART_SIZE,
       driveReady,
@@ -552,6 +560,29 @@ async function handleApi(request, env, url) {
       return json({ ok: true, job, cancel });
     }
 
+    if (action === 'retry') {
+      const target = String(job.targetLang || 'th');
+      const recoveredOutputKey = job.outputKey || `outputs/${job.id}/dub_${target}.mp4`;
+      const recoveredOutput = await resolveLogical(env, recoveredOutputKey);
+      if (recoveredOutput?.id && Number(recoveredOutput.size || 0) > 0) {
+        job.status = 'completed';
+        job.pauseRequested = false;
+        job.progress = 100;
+        job.stage = 'เสร็จสมบูรณ์';
+        job.outputKey = recoveredOutputKey;
+        job.sizeBytes = Number(recoveredOutput.size || 0);
+        if (job.subtitles !== false) {
+          const recoveredSubtitleKey = `outputs/${job.id}/dub_${target}.srt`;
+          const recoveredSubtitle = await resolveLogical(env, recoveredSubtitleKey);
+          if (recoveredSubtitle?.id) job.subtitleKey = recoveredSubtitleKey;
+        }
+        job.error = null;
+        job.cleanupPending = job.autoCleanup === true;
+        await writeJob(env, job);
+        return json({ ok: true, job, recovered: true });
+      }
+    }
+
     if (job.sourceType === 'upload' && job.sourceKey) {
       const src = await resolveLogical(env, job.sourceKey);
       if (!src) {
@@ -638,12 +669,15 @@ async function handleApi(request, env, url) {
         : [`${kind}/`];
     let freedBytes = 0;
     let deleted = 0;
+    let remaining = 0;
+    const perPrefix = kind === 'all' ? 4 : kind === 'temp' ? 8 : 12;
     for (const prefix of prefixes) {
-      const result = await deletePrefix(env, prefix);
+      const result = await deletePrefix(env, prefix, perPrefix);
       freedBytes += Number(result.bytes || 0);
       deleted += Number(result.count || 0);
+      remaining += Number(result.remaining || 0);
     }
-    return json({ ok: true, kind, freedBytes, deleted });
+    return json({ ok: true, kind, freedBytes, deleted, remaining });
   }
 
   return json({ error: 'not found' }, 404);

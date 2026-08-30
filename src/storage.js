@@ -403,15 +403,20 @@ async function deleteLogical(env, key) {
   return size;
 }
 
-async function deletePrefix(env, prefix) {
+async function deletePrefix(env, prefix, limit = null) {
   const files = await listAppFiles(env);
-  const matches = files.filter(f => String(f.appProperties?.logicalKey || '').startsWith(prefix));
+  const allMatches = files.filter(f => String(f.appProperties?.logicalKey || '').startsWith(prefix));
+  const requested = Number(limit);
+  const cap = Number.isFinite(requested) && requested > 0
+    ? Math.min(40, Math.floor(requested))
+    : allMatches.length;
+  const matches = allMatches.slice(0, cap);
   let bytes = 0;
   for (const f of matches) {
     bytes += Number(f.size || 0);
     await driveFetch(env, `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(f.id)}`, { method: 'DELETE' });
   }
-  return { bytes, count: matches.length };
+  return { bytes, count: matches.length, remaining: Math.max(0, allMatches.length - matches.length) };
 }
 
 async function storageInfo(env) {

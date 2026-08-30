@@ -151,6 +151,7 @@ def main() -> None:
         "-f", "concat", "-safe", "0", "-i", str(concat_file),
         "-map", "0:v:0", "-map", "0:a:0",
         "-c", "copy",
+        "-bsf:a", "aac_adtstoasc",
         "-avoid_negative_ts", "make_zero",
         "-movflags", "frag_keyframe+empty_moov+default_base_moof",
         "-f", "mp4", "pipe:1",
@@ -186,6 +187,18 @@ def main() -> None:
     size_bytes = int(upload_result.get("size") or 0)
     client.patch_job(job_id, status="processing", progress=99, stage="กำลังบันทึกผลลัพธ์")
     client.finish(job_id, output_key, subtitle_key, offset, size_bytes)
+
+    if bool(job.get("autoCleanup", True)):
+        for cleanup_kind in ("temp", "state"):
+            for _ in range(200):
+                try:
+                    cleanup = client.cleanup_job(job_id, cleanup_kind)
+                except Exception as cleanup_error:
+                    print(f"Cleanup warning ({cleanup_kind}): {cleanup_error}", flush=True)
+                    break
+                if int(cleanup.get("remaining") or 0) <= 0:
+                    break
+
     print(json.dumps({
         "jobId": job_id,
         "outputKey": output_key,

@@ -465,8 +465,19 @@ function bind() {
       if (!confirm(question)) return;
       showLoader(`กำลังลบ${label}`, 'กำลังคืนพื้นที่', 35);
       try {
-        const result = await api(`/api/cleanup/${kind}`, { method: 'POST', body: '{}' });
-        updateLoader(`ลบแล้ว คืนพื้นที่ ${fmtBytes(result.freedBytes)}`, 100);
+        let totalFreed = 0;
+        let result = { remaining: 1 };
+        let round = 0;
+        while (Number(result.remaining || 0) > 0 && round < 100) {
+          result = await api(`/api/cleanup/${kind}`, { method: 'POST', body: '{}' });
+          totalFreed += Number(result.freedBytes || 0);
+          round += 1;
+          if (Number(result.remaining || 0) > 0) {
+            updateLoader(`กำลังลบ${label} เหลือ ${result.remaining} รายการ`, Math.min(92, 35 + round * 6));
+          }
+        }
+        if (Number(result.remaining || 0) > 0) throw new Error('ยังลบไฟล์ไม่หมด กรุณากดลองอีกครั้ง');
+        updateLoader(`ลบแล้ว คืนพื้นที่ ${fmtBytes(totalFreed)}`, 100);
         if (kind === 'uploads' || kind === 'all') state.sourceKey = null;
         if (kind === 'all') state.progressFloor = {};
         await Promise.all([loadJobs(), loadFiles(), loadStorage()]);

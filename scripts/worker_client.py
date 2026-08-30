@@ -188,6 +188,11 @@ class WorkerClient:
             },
         )
 
+    def cleanup_job(self, job_id: str, kind: str) -> dict[str, Any]:
+        if kind not in {"temp", "state"}:
+            raise ValueError("cleanup kind must be temp or state")
+        return self._json("POST", "/api/internal/cleanup-job", json={"jobId": job_id, "kind": kind})
+
     def fail(self, job_id: str, error: str) -> dict[str, Any]:
         return self._json("POST", "/api/internal/fail", json={"jobId": job_id, "error": error[:4000]})
 
