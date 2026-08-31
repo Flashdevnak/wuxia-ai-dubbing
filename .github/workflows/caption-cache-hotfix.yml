@@ -1,0 +1,90 @@
+name: Apply Durable HAR Caption Cache
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/caption-cache-hotfix.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-deploy-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Apply durable caption patch
+        run: python scripts/apply_caption_cache_patch.py
+
+      - name: Validate source
+        run: |
+          node --check public/app.js
+          node --check src/worker.js
+          node --check src/youtube.js
+          python -m py_compile scripts/prepare_job.py scripts/extract_transcript_job.py scripts/youtube_transcript.py scripts/dub_chunk.py scripts/finalize_job.py scripts/worker_client.py
+          grep -q "/api/captions/import" src/worker.js
+          grep -q "captionKey" public/app.js
+          grep -q "fetchSignedYouTubeTranscript" src/youtube.js
+          grep -q "Using cached HAR transcript" scripts/prepare_job.py
+
+      - name: Commit production changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || git commit -m "Cache HAR captions before signed URLs expire"
+          git push origin main
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Deploy Worker and web assets
+        run: |
+          npm install
+          npx wrangler deploy
+
+      - name: Restore Worker secrets
+        env:
+          ACCESS_KEY: ${{ secrets.WUXIA_ACCESS_KEY }}
+          WORKER_TOKEN: ${{ secrets.WORKER_SHARED_TOKEN }}
+          DISPATCH_TOKEN: ${{ secrets.GH_DISPATCH_TOKEN }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+        run: |
+          printf '%s' "$ACCESS_KEY" | npx wrangler secret put ACCESS_KEY
+          printf '%s' "$WORKER_TOKEN" | npx wrangler secret put WORKER_SHARED_TOKEN
+          printf '%s' "$DISPATCH_TOKEN" | npx wrangler secret put GITHUB_TOKEN
+          printf '%s' "$GOOGLE_CLIENT_ID" | npx wrangler secret put GOOGLE_CLIENT_ID
+          printf '%s' "$GOOGLE_CLIENT_SECRET" | npx wrangler secret put GOOGLE_CLIENT_SECRET
+          printf '%s' "$GOOGLE_REFRESH_TOKEN" | npx wrangler secret put GOOGLE_REFRESH_TOKEN
+
+      - name: Verify production health with browser headers
+        env:
+          WORKER_URL: https://wuxia-ai-dubbing.26nak-testdev.workers.dev
+        run: |
+          python - <<'PY'
+          import json, os, urllib.request
+          req = urllib.request.Request(
+              os.environ['WORKER_URL'] + '/api/health',
+              headers={
+                  'User-Agent': 'Mozilla/5.0 (Linux; Android 16; SM-S711B) AppleWebKit/537.36 Chrome/140.0.0.0 Mobile Safari/537.36',
+                  'Accept': 'application/json,*/*',
+                  'Accept-Language': 'th-TH,th;q=0.9,en-US;q=0.8,en;q=0.7',
+              },
+          )
+          with urllib.request.urlopen(req, timeout=60) as r:
+              data = json.load(r)
+          assert data.get('ok') is True, data
+          assert data.get('driveReady') is True, data
+          assert data.get('core') == 'clean-v2.3', data
+          print({'ok': data['ok'], 'core': data['core'], 'driveReady': data['driveReady']})
+          PY
