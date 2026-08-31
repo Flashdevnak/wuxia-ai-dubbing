@@ -20,6 +20,7 @@ import {
   writeJob,
   listJobs,
 } from './storage.js';
+import { fetchYouTubeTranscript } from './youtube.js';
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8' };
 
@@ -279,6 +280,20 @@ async function cancelGitHubRun(env, runId) {
 async function handleInternal(request, env, url) {
   if (!workerAuthorized(request, env)) return json({ error: 'worker unauthorized' }, 401);
   const p = url.pathname;
+
+  if (p === '/api/internal/youtube-transcript' && request.method === 'POST') {
+    const body = await request.json();
+    try {
+      const result = await fetchYouTubeTranscript(
+        String(body.url || ''),
+        String(body.targetLang || 'th'),
+        String(body.sourceLang || 'auto'),
+      );
+      return json({ ok: true, ...result });
+    } catch (err) {
+      return json({ error: err?.message || String(err) }, 502);
+    }
+  }
 
   if (/^\/api\/internal\/jobs\/[^/]+$/.test(p)) {
     const id = decodeURIComponent(p.split('/').pop());

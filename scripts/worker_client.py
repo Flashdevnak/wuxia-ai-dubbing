@@ -41,6 +41,13 @@ class WorkerClient:
             return {}
         return r.json()
 
+    def youtube_transcript(self, url: str, target_lang: str = "th", source_lang: str = "auto") -> dict[str, Any]:
+        return self._json(
+            "POST",
+            "/api/internal/youtube-transcript",
+            json={"url": url, "targetLang": target_lang, "sourceLang": source_lang},
+        )
+
     def get_job(self, job_id: str) -> dict[str, Any]:
         return self._json("GET", f"/api/internal/jobs/{quote(job_id)}")["job"]
 

@@ -85,12 +85,17 @@ def main() -> None:
 
     try:
         client.patch_job(job_id, status="processing", progress=10, stage="กำลังอ่านคำบรรยายจาก YouTube")
-        data = extract_youtube_transcript(
-            source_url,
-            target_lang=target_lang,
-            source_lang=source_lang,
-            cookies_file=build_cookie_file(),
-        )
+        try:
+            data = client.youtube_transcript(source_url, target_lang=target_lang, source_lang=source_lang)
+            print(f"Cloudflare caption source: {data.get('origin')} {data.get('language')} {len(data.get('entries') or [])} lines")
+        except Exception as worker_exc:
+            print(f"Cloudflare caption extraction unavailable; using runner fallback: {worker_exc}")
+            data = extract_youtube_transcript(
+                source_url,
+                target_lang=target_lang,
+                source_lang=source_lang,
+                cookies_file=build_cookie_file(),
+            )
         entries = list(data.get("entries") or [])
         if not entries:
             raise RuntimeError("ไม่พบข้อความคำบรรยายในวิดีโอนี้")
