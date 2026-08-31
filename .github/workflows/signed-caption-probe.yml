@@ -1,0 +1,27 @@
+name: Probe Signed Caption URL
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/signed-caption-probe.yml'
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fetch signed Thai srv1
+        run: |
+          python - <<'PY'
+          import urllib.request
+          url = 'https://www.youtube.com/api/timedtext?v=Q3Ff-OExkB0&ei=LQ-VarzIGdaL1d8P64yzgAI&caps=asr&opi=112496729&xoaf=5&xowf=1&xospf=1&hl=en&ip=0.0.0.0&ipbits=0&expire=1788178845&sparams=ip%2Cipbits%2Cexpire%2Cv%2Cei%2Ccaps%2Copi%2Cxoaf&signature=59029B18EEDA69D2E4DBC96DF748B399DB496F48.4BA1D0FE68B17B8D52EF8C138DE8A2188F1085FF&key=yt8&lang=th&fmt=srv1'
+          req = urllib.request.Request(url, headers={'User-Agent':'Mozilla/5.0','Referer':'https://www.youtube.com/'})
+          with urllib.request.urlopen(req, timeout=30) as r:
+              data = r.read()
+              print('http', r.status, 'bytes', len(data), 'type', r.headers.get('content-type'))
+          text = data.decode('utf-8', errors='replace')
+          print('transcript_nodes', text.count('<text '))
+          assert len(data) > 1000 and '<text ' in text
+          PY
