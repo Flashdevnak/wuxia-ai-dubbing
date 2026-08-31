@@ -1,0 +1,87 @@
+name: Probe YouTube Trusted Session
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/youtube-trusted-session-probe.yml'
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install current YouTube stack
+        run: python -m pip install --disable-pip-version-check -U yt-dlp yt-dlp-ejs
+
+      - name: Generate trusted session on runner IP
+        run: |
+          set -euo pipefail
+          docker run --rm --network host ghcr.io/imputnet/yt-session-generator:latest > /tmp/yt-session.txt 2>&1
+          python - <<'PY'
+          import os, re
+          text = open('/tmp/yt-session.txt', 'r', encoding='utf-8', errors='replace').read()
+          patterns = {
+              'YT_VISITOR_DATA': [r'visitor_data\s*[:=]\s*["\']?([^\s"\']+)', r'visitorData\s*[:=]\s*["\']?([^\s"\']+)'],
+              'YT_PO_TOKEN': [r'po_token\s*[:=]\s*["\']?([^\s"\']+)', r'poToken\s*[:=]\s*["\']?([^\s"\']+)'],
+          }
+          found = {}
+          for key, pats in patterns.items():
+              for pat in pats:
+                  m = re.search(pat, text, re.I)
+                  if m:
+                      found[key] = m.group(1).strip(' ,;}')
+                      break
+          if len(found) != 2:
+              print('session generator output could not be parsed; keys seen only')
+              print('visitor_data_present=', bool(re.search(r'visitor', text, re.I)))
+              print('po_token_present=', bool(re.search(r'po.?token', text, re.I)))
+              raise SystemExit(1)
+          env_path = os.environ['GITHUB_ENV']
+          with open(env_path, 'a', encoding='utf-8') as f:
+              for k, v in found.items():
+                  print(f'::add-mask::{v}')
+                  f.write(f'{k}={v}\n')
+          print('trusted session generated', {'visitor_len': len(found['YT_VISITOR_DATA']), 'token_len': len(found['YT_PO_TOKEN'])})
+          PY
+
+      - name: Probe media using trusted session
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f trusted-media.* trusted-sub*
+          args="youtube:player_client=web;player_skip=webpage,configs;visitor_data=${YT_VISITOR_DATA};po_token=web.gvs+${YT_PO_TOKEN},web.player+${YT_PO_TOKEN},web.subs+${YT_PO_TOKEN}"
+          yt-dlp -v --js-runtimes node \
+            --extractor-args "$args" \
+            --test -f 'bestaudio/best' \
+            -o 'trusted-media.%(ext)s' \
+            'https://www.youtube.com/watch?v=Q3Ff-OExkB0'
+          f="$(find . -maxdepth 1 -type f -name 'trusted-media.*' -print -quit)"
+          test -n "$f"
+          test "$(stat -c%s "$f")" -gt 1000
+          echo "MEDIA_OK bytes=$(stat -c%s "$f")"
+
+      - name: Probe Thai subtitles using trusted session
+        shell: bash
+        run: |
+          set -euo pipefail
+          args="youtube:player_client=web;player_skip=webpage,configs;visitor_data=${YT_VISITOR_DATA};po_token=web.gvs+${YT_PO_TOKEN},web.player+${YT_PO_TOKEN},web.subs+${YT_PO_TOKEN}"
+          yt-dlp -v --js-runtimes node \
+            --extractor-args "$args" \
+            --skip-download --write-subs --write-auto-subs \
+            --sub-langs 'th' --sub-format 'srv1/vtt/best' \
+            -o 'trusted-sub.%(ext)s' \
+            'https://www.youtube.com/watch?v=Q3Ff-OExkB0'
+          f="$(find . -maxdepth 1 -type f -name 'trusted-sub*.th.*' -print -quit)"
+          test -n "$f"
+          test "$(stat -c%s "$f")" -gt 100
+          echo "SUB_OK bytes=$(stat -c%s "$f")"
