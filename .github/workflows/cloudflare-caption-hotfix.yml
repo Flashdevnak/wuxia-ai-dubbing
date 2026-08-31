@@ -1,0 +1,104 @@
+name: Apply Cloudflare Caption Hotfix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/cloudflare-caption-hotfix.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  hotfix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WORKER_URL: https://wuxia-ai-dubbing.26nak-testdev.workers.dev
+      WORKER_SHARED_TOKEN: ${{ secrets.WORKER_SHARED_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Patch Worker and transcript client
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/worker.js')
+          text = p.read_text(encoding='utf-8')
+          imp = "import { fetchYouTubeTranscript } from './youtube.js';"
+          if imp not in text:
+              needle = "} from './storage.js';\n\nconst JSON_HEADERS"
+              if needle not in text:
+                  raise SystemExit('worker import anchor not found')
+              text = text.replace(needle, "} from './storage.js';\n" + imp + "\n\nconst JSON_HEADERS", 1)
+
+          route = """\n  if (p === '/api/internal/youtube-transcript' && request.method === 'POST') {\n    const body = await request.json();\n    try {\n      const result = await fetchYouTubeTranscript(\n        String(body.url || ''),\n        String(body.targetLang || 'th'),\n        String(body.sourceLang || 'auto'),\n      );\n      return json({ ok: true, ...result });\n    } catch (err) {\n      return json({ error: err?.message || String(err) }, 502);\n    }\n  }\n"""
+          if "/api/internal/youtube-transcript" not in text:
+              anchor = "async function handleInternal(request, env, url) {\n  if (!workerAuthorized(request, env)) return json({ error: 'worker unauthorized' }, 401);\n  const p = url.pathname;\n"
+              if anchor not in text:
+                  raise SystemExit('internal route anchor not found')
+              text = text.replace(anchor, anchor + route, 1)
+          p.write_text(text, encoding='utf-8')
+
+          p = Path('scripts/worker_client.py')
+          text = p.read_text(encoding='utf-8')
+          method = '''    def youtube_transcript(self, url: str, target_lang: str = "th", source_lang: str = "auto") -> dict[str, Any]:\n        return self._json(\n            "POST",\n            "/api/internal/youtube-transcript",\n            json={"url": url, "targetLang": target_lang, "sourceLang": source_lang},\n        )\n\n'''
+          if 'def youtube_transcript(' not in text:
+              anchor = '    def get_job(self, job_id: str) -> dict[str, Any]:\n'
+              if anchor not in text:
+                  raise SystemExit('worker client anchor not found')
+              text = text.replace(anchor, method + anchor, 1)
+          p.write_text(text, encoding='utf-8')
+
+          p = Path('scripts/extract_transcript_job.py')
+          text = p.read_text(encoding='utf-8')
+          old = '''        data = extract_youtube_transcript(\n            source_url,\n            target_lang=target_lang,\n            source_lang=source_lang,\n            cookies_file=build_cookie_file(),\n        )\n'''
+          new = '''        try:\n            data = client.youtube_transcript(source_url, target_lang=target_lang, source_lang=source_lang)\n            print(f"Cloudflare caption source: {data.get('origin')} {data.get('language')} {len(data.get('entries') or [])} lines")\n        except Exception as worker_exc:\n            print(f"Cloudflare caption extraction unavailable; using runner fallback: {worker_exc}")\n            data = extract_youtube_transcript(\n                source_url,\n                target_lang=target_lang,\n                source_lang=source_lang,\n                cookies_file=build_cookie_file(),\n            )\n'''
+          if 'client.youtube_transcript(' not in text:
+              if old not in text:
+                  raise SystemExit('transcript extraction anchor not found')
+              text = text.replace(old, new, 1)
+          p.write_text(text, encoding='utf-8')
+          print('patched Worker + runner transcript bridge')
+          PY
+
+      - name: Validate source
+        run: |
+          node --check src/worker.js
+          node --check src/youtube.js
+          python -m py_compile scripts/worker_client.py scripts/extract_transcript_job.py scripts/youtube_transcript.py
+
+      - name: Commit permanent source changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/worker.js scripts/worker_client.py scripts/extract_transcript_job.py
+          git diff --cached --quiet || git commit -m "Route YouTube captions through Cloudflare Worker"
+          git push origin main
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Deploy Worker
+        run: |
+          npm install
+          npx wrangler deploy
+
+      - name: Verify exact YouTube caption through Worker
+        run: |
+          python - <<'PY'
+          import os, sys
+          sys.path.insert(0, 'scripts')
+          from worker_client import WorkerClient
+          client = WorkerClient(os.environ['WORKER_URL'], os.environ['WORKER_SHARED_TOKEN'])
+          data = client.youtube_transcript('https://www.youtube.com/watch?v=Q3Ff-OExkB0', target_lang='th', source_lang='auto')
+          entries = data.get('entries') or []
+          assert len(entries) >= 50, data
+          assert data.get('targetReady') is True, data
+          print({'origin': data.get('origin'), 'language': data.get('language'), 'lines': len(entries), 'firstStart': entries[0].get('start')})
+          PY
