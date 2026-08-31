@@ -1,4 +1,5 @@
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36';
+const INNERTUBE_API_KEY = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
 
 // Public community APIs are fallbacks only. They are intentionally tried as a
 // small pool because YouTube frequently blocks datacenter IPs, including ours.
@@ -386,6 +387,72 @@ async function getPlayer(id) {
   return playerFromInnertube(id, cfg.key, cfg.version);
 }
 
+async function androidTranscript(id, targetLang, sourceLang) {
+  try {
+    const androidUA = 'com.google.android.youtube/19.47.53 (Linux; U; Android 14) gzip';
+    const res = await fetchTimeout(
+      `https://www.youtube.com/youtubei/v1/player?key=${INNERTUBE_API_KEY}&prettyPrint=false`,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'user-agent': androidUA,
+          'x-youtube-client-name': '3',
+          'x-youtube-client-version': '19.47.53',
+        },
+        body: JSON.stringify({
+          context: {
+            client: {
+              hl: 'en',
+              gl: 'US',
+              clientName: 'ANDROID',
+              clientVersion: '19.47.53',
+              androidSdkVersion: 34,
+              userAgent: androidUA,
+            },
+          },
+          videoId: id,
+          contentCheckOk: true,
+          racyCheckOk: true,
+        }),
+      },
+      10000,
+    );
+    if (!res.ok) return null;
+    const player = await res.json();
+    const { tracks, translations } = tracksFromPlayer(player);
+    if (!tracks.length) return null;
+    const chosen = chooseTrack(tracks, targetLang, sourceLang);
+    if (!chosen?.baseUrl) return null;
+    const target = baseLang(targetLang);
+    const exact = baseLang(chosen.languageCode) === target;
+    const canTranslate = chosen.isTranslatable === true || translations.some(x => baseLang(x.languageCode) === target);
+    const attempts = [];
+    if (exact) attempts.push({ url: signedVariant(chosen.baseUrl, { fmt: 'srv1' }), language: chosen.languageCode, ready: true, origin: 'innertube-android-exact' });
+    if (!exact && canTranslate) {
+      attempts.push({ url: signedVariant(chosen.baseUrl, { tlang: targetLang, fmt: 'srv1' }), language: targetLang, ready: true, origin: 'innertube-android-translate' });
+      attempts.push({ url: signedVariant(chosen.baseUrl, { lang: targetLang, fmt: 'srv1' }), language: targetLang, ready: true, origin: 'innertube-android-language' });
+    }
+    attempts.push({ url: signedVariant(chosen.baseUrl, { fmt: 'srv1' }), language: chosen.languageCode, ready: exact, origin: 'innertube-android-source' });
+    for (const attempt of attempts) {
+      const hit = await fetchCaption(attempt.url, id);
+      if (hit?.entries?.length) {
+        return {
+          videoId: id,
+          title: String(player?.videoDetails?.title || ''),
+          language: attempt.language,
+          targetLanguage: targetLang,
+          targetReady: attempt.ready,
+          origin: attempt.origin,
+          format: 'srv1',
+          entries: hit.entries,
+        };
+      }
+    }
+  } catch {}
+  return null;
+}
+
 async function signedYouTubeTranscript(id, targetLang, sourceLang) {
   const player = await getPlayer(id);
   const { tracks, translations } = tracksFromPlayer(player);
@@ -414,6 +481,9 @@ export async function fetchYouTubeTranscript(sourceUrl, targetLang = 'th', sourc
 
   const direct = await directUnsigned(id, targetLang, sourceLang);
   if (direct?.entries?.length) return { videoId: id, targetLanguage: targetLang, format: 'srv1', ...direct };
+
+  const android = await androidTranscript(id, targetLang, sourceLang);
+  if (android?.entries?.length) return android;
 
   const piped = await pipedTranscript(id, targetLang, sourceLang);
   if (piped?.entries?.length) return { videoId: id, targetLanguage: targetLang, format: 'proxy-caption', ...piped };
