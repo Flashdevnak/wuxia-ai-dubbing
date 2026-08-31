@@ -38,7 +38,7 @@ jobs:
           python - <<'PY'
           import scripts.youtube_transcript as y
           original = y._http_get
-          y._http_get = lambda *args, **kwargs: b'<transcript><text start="1.25" dur="2.5">ทดสอบ</text></transcript>'
+          y._http_get = lambda *args, **kwargs: '<transcript><text start="1.25" dur="2.5">ทดสอบ</text></transcript>'.encode('utf-8')
           try:
               data = y.extract_signed_youtube_transcript(
                   'https://www.youtube.com/api/timedtext?v=Q3Ff-OExkB0&lang=th&fmt=srv1&signature=test',
