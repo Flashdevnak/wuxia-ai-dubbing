@@ -1,0 +1,68 @@
+name: Probe YouTube with PO Token
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/youtube-pot-probe.yml'
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install current YouTube stack
+        run: |
+          python -m pip install --disable-pip-version-check -U yt-dlp bgutil-ytdlp-pot-provider yt-dlp-ejs
+          yt-dlp --version
+
+      - name: Start PO Token provider on this runner
+        run: |
+          docker run --rm -d --name bgutil-provider --network host --init brainicism/bgutil-ytdlp-pot-provider:latest
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:4416/ping; then
+              echo
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:4416/ping
+
+      - name: Verify plugin is loaded
+        run: |
+          yt-dlp -v --simulate --extractor-args "youtube:player_client=mweb" 'https://www.youtube.com/watch?v=Q3Ff-OExkB0' 2>&1 | tee yt-dlp-debug.log || true
+          grep -E "PO Token Providers|pot:bgutil|bgutil" yt-dlp-debug.log
+
+      - name: Probe Thai subtitles
+        run: |
+          rm -f probe.*
+          yt-dlp -v \
+            --extractor-args "youtube:player_client=mweb" \
+            --skip-download \
+            --write-subs --write-auto-subs \
+            --sub-langs 'th' --sub-format 'vtt/srv1/best' \
+            -o 'probe.%(ext)s' \
+            'https://www.youtube.com/watch?v=Q3Ff-OExkB0'
+          ls -lah probe* || true
+          test -n "$(find . -maxdepth 1 -type f -name 'probe*.th.*' -print -quit)"
+
+      - name: Probe media bytes
+        run: |
+          rm -f media-probe.*
+          yt-dlp -v \
+            --extractor-args "youtube:player_client=mweb" \
+            --test \
+            -f 'bestaudio/best' \
+            -o 'media-probe.%(ext)s' \
+            'https://www.youtube.com/watch?v=Q3Ff-OExkB0'
+          f="$(find . -maxdepth 1 -type f -name 'media-probe.*' -print -quit)"
+          test -n "$f"
+          test "$(stat -c%s "$f")" -gt 1000
+          ls -lah "$f"
