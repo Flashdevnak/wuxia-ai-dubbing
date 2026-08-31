@@ -508,7 +508,21 @@ async function handleApi(request, env, url) {
   if (p === '/api/uploads/complete' && request.method === 'POST') return json(await completeUpload(env, await request.json()));
   if (p === '/api/uploads/abort' && request.method === 'POST') return json(await abortUpload(env, await request.json()));
 
-  if (p === '/api/jobs' && request.method === 'GET') return json({ jobs: await listJobs(env) });
+  if (p === '/api/jobs' && request.method === 'GET') {
+  const jobs = await listJobs(env);
+  const now = Date.now();
+  for (const job of jobs) {
+    if (job.jobType !== 'transcript' || job.status !== 'queued' || job.runId) continue;
+    const queuedAt = Date.parse(job.updatedAt || job.createdAt || '');
+    if (!Number.isFinite(queuedAt) || now - queuedAt < 10 * 60 * 1000) continue;
+    job.status = 'failed';
+    job.stage = 'เริ่มงานดึงคำบรรยายไม่สำเร็จ';
+    job.error = 'งานดึงคำบรรยายไม่เริ่มทำงานภายในเวลาที่กำหนด กรุณากดลองใหม่';
+    job.progress = Math.max(3, cleanProgress(job.progress));
+    await writeJob(env, job);
+  }
+  return json({ jobs });
+}
 
   if (p === '/api/jobs' && request.method === 'POST') {
     const body = await request.json();
@@ -545,10 +559,11 @@ async function handleApi(request, env, url) {
     const workerBase = `${url.protocol}//${url.host}`;
     const dispatch = await triggerGitHub(env, job, workerBase);
     if (!dispatch.triggered) {
-      job.stage = 'ยังเริ่มประมวลผลไม่ได้';
-      job.error = dispatch.detail || dispatch.reason || null;
-      await writeJob(env, job);
-    }
+    job.status = 'failed';
+    job.stage = job.jobType === 'transcript' ? 'เริ่มงานดึงคำบรรยายไม่สำเร็จ' : 'ยังเริ่มประมวลผลไม่ได้';
+    job.error = dispatch.detail || dispatch.reason || 'ไม่สามารถส่งงานไปประมวลผลได้';
+    await writeJob(env, job);
+  }
     return json({ job, dispatch }, 201);
   }
 
