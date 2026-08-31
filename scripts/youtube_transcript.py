@@ -8,10 +8,191 @@ import xml.etree.ElementTree as ET
 from http.cookiejar import MozillaCookieJar
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import HTTPCookieProcessor, Request, build_opener
 
 
 PREFERRED_FORMATS = ("srv1", "json3", "vtt")
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/152.0.0.0 Safari/537.36"
+
+
+def _base_lang(value: str) -> str:
+    return str(value or "").lower().split("-")[0].split("_")[0]
+
+
+def _video_id(url: str) -> str:
+    value = str(url or "").strip()
+    parsed = urlparse(value)
+    host = parsed.netloc.lower().split(":")[0]
+    if host in {"youtu.be", "www.youtu.be"}:
+        return parsed.path.strip("/").split("/")[0]
+    if host.endswith("youtube.com"):
+        qs = parse_qs(parsed.query)
+        if qs.get("v"):
+            return str(qs["v"][0]).strip()
+        parts = [p for p in parsed.path.split("/") if p]
+        if len(parts) >= 2 and parts[0] in {"shorts", "embed", "live"}:
+            return parts[1]
+    m = re.search(r"(?:v=|youtu\.be/|shorts/|embed/|live/)([A-Za-z0-9_-]{6,})", value)
+    if m:
+        return m.group(1)
+    raise RuntimeError("ลิงก์ YouTube นี้ไม่มีรหัสวิดีโอที่อ่านได้")
+
+
+def _opener(cookies_file: Path | None):
+    handlers = []
+    if cookies_file:
+        try:
+            jar = MozillaCookieJar(str(cookies_file))
+            jar.load(ignore_discard=True, ignore_expires=True)
+            handlers.append(HTTPCookieProcessor(jar))
+        except Exception:
+            pass
+    return build_opener(*handlers)
+
+
+def _http_get(url: str, cookies_file: Path | None = None, headers: dict[str, str] | None = None) -> bytes:
+    merged = {
+        "User-Agent": USER_AGENT,
+        "Accept-Language": "th-TH,th;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept": "*/*",
+    }
+    if headers:
+        merged.update({str(k): str(v) for k, v in headers.items() if v is not None})
+    req = Request(url, headers=merged)
+    with _opener(cookies_file).open(req, timeout=60) as response:
+        return response.read()
+
+
+def _direct_tracks(video_id: str, cookies_file: Path | None = None) -> list[dict[str, str]]:
+    query = urlencode({"v": video_id, "type": "list", "hl": "en"})
+    raw = _http_get(f"https://www.youtube.com/api/timedtext?{query}", cookies_file)
+    if not raw.strip():
+        return []
+    try:
+        root = ET.fromstring(raw.decode("utf-8", errors="replace"))
+    except Exception:
+        return []
+    tracks: list[dict[str, str]] = []
+    for node in root.findall(".//track"):
+        attrs = {str(k): str(v) for k, v in node.attrib.items()}
+        lang = attrs.get("lang_code") or attrs.get("lang") or ""
+        if not lang:
+            continue
+        tracks.append({
+            "lang": lang,
+            "name": attrs.get("name") or "",
+            "kind": attrs.get("kind") or "",
+            "cantran": attrs.get("cantran") or attrs.get("can_translate") or "",
+            "lang_original": attrs.get("lang_original") or "",
+        })
+    return tracks
+
+
+def _select_direct_track(tracks: list[dict[str, str]], target_lang: str, source_lang: str) -> dict[str, str]:
+    target = _base_lang(target_lang)
+    source = _base_lang(source_lang)
+    for track in tracks:
+        if _base_lang(track.get("lang", "")) == target:
+            return track
+    if source and source != "auto":
+        for track in tracks:
+            if _base_lang(track.get("lang", "")) == source:
+                return track
+    # Prefer a normal/manual track before ASR when language is otherwise unknown.
+    for track in tracks:
+        if str(track.get("kind") or "").lower() != "asr":
+            return track
+    if tracks:
+        return tracks[0]
+    raise RuntimeError("วิดีโอนี้ไม่มีคำบรรยาย YouTube ที่ดึงได้")
+
+
+def _timedtext_url(video_id: str, track: dict[str, str], target_lang: str | None = None) -> str:
+    params: dict[str, str] = {
+        "v": video_id,
+        "lang": str(track.get("lang") or ""),
+        "fmt": "srv1",
+    }
+    if track.get("name"):
+        params["name"] = str(track["name"])
+    if track.get("kind"):
+        params["kind"] = str(track["kind"])
+    if target_lang:
+        params["tlang"] = str(target_lang)
+    return "https://www.youtube.com/api/timedtext?" + urlencode(params)
+
+
+def _extract_direct(
+    url: str,
+    target_lang: str,
+    source_lang: str,
+    cookies_file: Path | None,
+) -> dict[str, Any] | None:
+    video_id = _video_id(url)
+    try:
+        tracks = _direct_tracks(video_id, cookies_file)
+    except Exception:
+        return None
+    if not tracks:
+        return None
+    track = _select_direct_track(tracks, target_lang, source_lang)
+    track_lang = str(track.get("lang") or "")
+    target = _base_lang(target_lang)
+
+    # If a Thai/target track already exists, download it directly.
+    if _base_lang(track_lang) == target:
+        raw = _http_get(_timedtext_url(video_id, track), cookies_file)
+        entries = _parse_srv1(raw) if raw.strip() else []
+        if entries:
+            return {
+                "videoId": video_id,
+                "title": "",
+                "language": target_lang,
+                "targetLanguage": target_lang,
+                "targetReady": True,
+                "origin": "youtube-timedtext",
+                "format": "srv1",
+                "entries": entries,
+            }
+
+    # YouTube's timedtext endpoint can translate a caption track while keeping
+    # the original timestamps. Try that before asking our translator to rewrite it.
+    can_translate = str(track.get("cantran") or "").lower() in {"1", "true", "yes"}
+    if target and can_translate:
+        try:
+            translated_raw = _http_get(_timedtext_url(video_id, track, target_lang), cookies_file)
+            translated_entries = _parse_srv1(translated_raw) if translated_raw.strip() else []
+            if translated_entries:
+                return {
+                    "videoId": video_id,
+                    "title": "",
+                    "language": target_lang,
+                    "targetLanguage": target_lang,
+                    "targetReady": True,
+                    "origin": "youtube-timedtext-translation",
+                    "format": "srv1",
+                    "entries": translated_entries,
+                    "sourceTrackLanguage": track_lang,
+                }
+        except Exception:
+            pass
+
+    # Translation unavailable: preserve the YouTube timing and translate later.
+    raw = _http_get(_timedtext_url(video_id, track), cookies_file)
+    entries = _parse_srv1(raw) if raw.strip() else []
+    if not entries:
+        return None
+    return {
+        "videoId": video_id,
+        "title": "",
+        "language": track_lang,
+        "targetLanguage": target_lang,
+        "targetReady": _base_lang(track_lang) == target,
+        "origin": "youtube-timedtext",
+        "format": "srv1",
+        "entries": entries,
+    }
 
 
 def _yt_info(url: str, cookies_file: Path | None = None) -> dict[str, Any]:
@@ -34,11 +215,10 @@ def _yt_info(url: str, cookies_file: Path | None = None) -> dict[str, Any]:
         else:
             tail = " ".join((p.stderr or "").strip().splitlines()[-3:])
             errors.append(tail or f"yt-dlp exited {p.returncode}")
-    raise RuntimeError("อ่านข้อมูลคำบรรยาย YouTube ไม่สำเร็จ: " + " | ".join(errors[-2:])[-900:])
-
-
-def _base_lang(value: str) -> str:
-    return str(value or "").lower().split("-")[0].split("_")[0]
+    detail = " | ".join(errors[-2:])[-900:]
+    if "not a bot" in detail.lower() or "sign in to confirm" in detail.lower():
+        raise RuntimeError("YouTube ปฏิเสธการเชื่อมต่อจากเซิร์ฟเวอร์ชั่วคราว ระบบลองช่องทางดึงซับโดยตรงแล้วแต่ยังเข้าไม่ได้")
+    raise RuntimeError("อ่านข้อมูลคำบรรยาย YouTube ไม่สำเร็จ: " + detail)
 
 
 def _select_track(info: dict[str, Any], target_lang: str, source_lang: str) -> tuple[str, list[dict[str, Any]], str]:
@@ -56,28 +236,21 @@ def _select_track(info: dict[str, Any], target_lang: str, source_lang: str) -> t
         return out
 
     groups = [("manual", usable(manual)), ("automatic", usable(automatic))]
-
-    # Prefer a caption that is already in the requested target language. yt-dlp
-    # exposes YouTube automatic translations with keys such as th-en as well.
     for origin, items in groups:
         for key, formats in items:
             if _base_lang(key) == target:
                 return key, formats, origin
-
-    # Otherwise keep the original caption timing/text and translate later.
     if source and source != "auto":
         for origin, items in groups:
             for key, formats in items:
                 if _base_lang(key) == source:
                     return key, formats, origin
-
     detected = _base_lang(str(info.get("language") or ""))
     if detected:
         for origin, items in groups:
             for key, formats in items:
                 if _base_lang(key) == detected:
                     return key, formats, origin
-
     for origin, items in groups:
         if items:
             return items[0][0], items[0][1], origin
@@ -97,18 +270,7 @@ def _choose_format(formats: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _download(url: str, info: dict[str, Any], cookies_file: Path | None) -> bytes:
     headers = {str(k): str(v) for k, v in dict(info.get("http_headers") or {}).items() if v is not None}
-    headers.setdefault("User-Agent", "Mozilla/5.0")
-    handlers = []
-    if cookies_file:
-        try:
-            jar = MozillaCookieJar(str(cookies_file))
-            jar.load(ignore_discard=True, ignore_expires=True)
-            handlers.append(HTTPCookieProcessor(jar))
-        except Exception:
-            pass
-    opener = build_opener(*handlers)
-    with opener.open(Request(url, headers=headers), timeout=60) as r:
-        return r.read()
+    return _http_get(url, cookies_file, headers)
 
 
 def _clean_text(value: str) -> str:
@@ -119,7 +281,10 @@ def _clean_text(value: str) -> str:
 
 
 def _parse_srv1(raw: bytes) -> list[dict[str, Any]]:
-    root = ET.fromstring(raw.decode("utf-8", errors="replace"))
+    try:
+        root = ET.fromstring(raw.decode("utf-8", errors="replace"))
+    except Exception:
+        return []
     entries: list[dict[str, Any]] = []
     for node in root.findall(".//text"):
         text = _clean_text("".join(node.itertext()))
@@ -167,7 +332,6 @@ def _parse_vtt(raw: bytes) -> list[dict[str, Any]]:
     for m in pattern.finditer(text):
         start, end = ts(m.group(1)), ts(m.group(2))
         body = _clean_text(m.group(3))
-        # Auto-VTT can repeat rolling caption windows; avoid adjacent duplicates.
         if not body or body == last_text:
             continue
         last_text = body
@@ -181,6 +345,11 @@ def extract_youtube_transcript(
     source_lang: str = "auto",
     cookies_file: Path | None = None,
 ) -> dict[str, Any]:
+    direct = _extract_direct(url, target_lang, source_lang, cookies_file)
+    if direct and direct.get("entries"):
+        return direct
+
+    # Fallback for videos where the legacy timedtext track list is unavailable.
     info = _yt_info(url, cookies_file)
     language, formats, origin = _select_track(info, target_lang, source_lang)
     selected = _choose_format(formats)
@@ -197,7 +366,7 @@ def extract_youtube_transcript(
 
     target_ready = _base_lang(language) == _base_lang(target_lang)
     return {
-        "videoId": str(info.get("id") or ""),
+        "videoId": str(info.get("id") or _video_id(url)),
         "title": str(info.get("title") or ""),
         "language": language,
         "targetLanguage": target_lang,
