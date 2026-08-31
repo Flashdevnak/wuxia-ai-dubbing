@@ -1,0 +1,46 @@
+name: Probe YouTube Embedded Client
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/youtube-embedded-probe.yml'
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Install yt-dlp stack
+        run: python -m pip install --disable-pip-version-check -U yt-dlp yt-dlp-ejs
+      - name: Probe clients
+        shell: bash
+        run: |
+          set +e
+          ok=0
+          for client in web_embedded web_safari tv tv_simply; do
+            echo "===== CLIENT $client ====="
+            rm -f "probe-$client".*
+            yt-dlp -v --js-runtimes node \
+              --extractor-args "youtube:player_client=$client" \
+              --test -f 'bestaudio/best' \
+              -o "probe-$client.%(ext)s" \
+              'https://www.youtube.com/watch?v=Q3Ff-OExkB0'
+            rc=$?
+            f="$(find . -maxdepth 1 -type f -name "probe-$client.*" -print -quit)"
+            if [ $rc -eq 0 ] && [ -n "$f" ] && [ "$(stat -c%s "$f")" -gt 1000 ]; then
+              echo "MEDIA_OK client=$client file=$f bytes=$(stat -c%s "$f")"
+              ok=1
+              break
+            fi
+            echo "CLIENT_FAILED client=$client rc=$rc"
+          done
+          test $ok -eq 1
