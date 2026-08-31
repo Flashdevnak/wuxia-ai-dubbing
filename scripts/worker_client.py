@@ -21,7 +21,15 @@ class WorkerClient:
 
     @property
     def headers(self) -> dict[str, str]:
-        return {"x-worker-token": self.token}
+        # Keep internal runner traffic consistent with the browser-like headers
+        # used by the production smoke tests. Some Cloudflare security layers
+        # reject bare Python/urllib requests before they reach the Worker.
+        return {
+            "x-worker-token": self.token,
+            "user-agent": "Mozilla/5.0 (Linux; Android 16; SM-S711B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36",
+            "accept": "*/*",
+            "accept-language": "th-TH,th;q=0.9,en-US;q=0.8,en;q=0.7",
+        }
 
     def _json(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
         headers = dict(self.headers)
