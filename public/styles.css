@@ -81,3 +81,10 @@ button,input,select{font:inherit;color:inherit}button{cursor:pointer}.hidden{dis
 
 /* storage-cleanup-controls-v1 */
 .storage-actions h2{margin:0 0 6px}.storage-action-note{margin:0 0 16px;opacity:.78}.storage-delete-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.storage-delete-grid .btn{width:100%;min-height:52px}.storage-delete-grid .btn:disabled{opacity:.38;filter:grayscale(.5);cursor:not-allowed}.storage-warning{display:block;margin-top:14px;line-height:1.55;opacity:.72}@media(max-width:680px){.storage-delete-grid{grid-template-columns:1fr}.storage-delete-grid .btn{min-height:56px}}
+
+
+/* HAR subtitle fallback */
+.har-import{margin-top:14px;padding:14px 16px;border:1px solid rgba(255,180,84,.2);border-radius:14px;background:rgba(20,8,4,.45);display:flex;align-items:center;justify-content:space-between;gap:14px}
+.har-copy{display:flex;flex-direction:column;gap:4px;min-width:0}.har-copy b{font-size:14px}.har-copy small{opacity:.72;line-height:1.45}
+.har-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}.har-file-input{display:none}.har-btn{cursor:pointer;white-space:nowrap}.har-status{font-size:12px;opacity:.78;max-width:360px}.har-status.ready{opacity:1}.har-status.error{opacity:1}
+@media(max-width:760px){.har-import{align-items:stretch;flex-direction:column}.har-actions{justify-content:flex-start}.har-status{max-width:none;width:100%}}

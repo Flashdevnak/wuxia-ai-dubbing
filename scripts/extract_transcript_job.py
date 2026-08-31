@@ -9,7 +9,7 @@ from pathlib import Path
 import srt
 
 from worker_client import WorkerClient
-from youtube_transcript import extract_youtube_transcript, transcript_xml
+from youtube_transcript import extract_youtube_transcript, extract_signed_youtube_transcript, transcript_xml
 
 
 def build_cookie_file() -> Path | None:
@@ -85,17 +85,26 @@ def main() -> None:
 
     try:
         client.patch_job(job_id, status="processing", progress=10, stage="กำลังอ่านคำบรรยายจาก YouTube")
-        try:
-            data = client.youtube_transcript(source_url, target_lang=target_lang, source_lang=source_lang)
-            print(f"Cloudflare caption source: {data.get('origin')} {data.get('language')} {len(data.get('entries') or [])} lines")
-        except Exception as worker_exc:
-            print(f"Cloudflare caption extraction unavailable; using runner fallback: {worker_exc}")
-            data = extract_youtube_transcript(
-                source_url,
+        caption_url = str(job.get("captionUrl") or "").strip()
+        if caption_url:
+            data = extract_signed_youtube_transcript(
+                caption_url,
                 target_lang=target_lang,
-                source_lang=source_lang,
-                cookies_file=build_cookie_file(),
+                expected_video_url=source_url or None,
             )
+            print(f"HAR signed caption source: {data.get('language')} {len(data.get('entries') or [])} lines")
+        else:
+            try:
+                data = client.youtube_transcript(source_url, target_lang=target_lang, source_lang=source_lang)
+                print(f"Cloudflare caption source: {data.get('origin')} {data.get('language')} {len(data.get('entries') or [])} lines")
+            except Exception as worker_exc:
+                print(f"Cloudflare caption extraction unavailable; using runner fallback: {worker_exc}")
+                data = extract_youtube_transcript(
+                    source_url,
+                    target_lang=target_lang,
+                    source_lang=source_lang,
+                    cookies_file=build_cookie_file(),
+                )
         entries = list(data.get("entries") or [])
         if not entries:
             raise RuntimeError("ไม่พบข้อความคำบรรยายในวิดีโอนี้")
@@ -128,7 +137,7 @@ def main() -> None:
             transcriptXmlKey=xml_key,
             subtitleKey=srt_key,
             transcriptLanguage=target_lang,
-            transcriptSource="youtube",
+            transcriptSource=("bunny-har" if caption_url else "youtube"),
             duration=end_time,
             sizeBytes=int(xml_result.get("size") or 0) + int(srt_result.get("size") or 0),
             error=None,

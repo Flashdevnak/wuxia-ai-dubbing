@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from worker_client import WorkerClient
-from youtube_transcript import extract_youtube_transcript, slice_entries, transcript_xml
+from youtube_transcript import extract_youtube_transcript, extract_signed_youtube_transcript, slice_entries, transcript_xml
 
 
 class CommandError(RuntimeError):
@@ -221,6 +221,28 @@ def main() -> None:
         key = job.get("sourceKey")
         if not key:
             raise RuntimeError("Uploaded job has no sourceKey")
+        caption_url = str(job.get("captionUrl") or "").strip()
+        if caption_url:
+            youtube_transcript = extract_signed_youtube_transcript(
+                caption_url,
+                target_lang=str(job.get("targetLang") or "th"),
+                expected_video_url=str(job.get("sourceUrl") or "").strip() or None,
+            )
+            full_json = work / "youtube_transcript.json"
+            full_json.write_text(json.dumps(youtube_transcript, ensure_ascii=False, indent=2), encoding="utf-8")
+            client.upload(full_json, f"temp/{job_id}/transcript/full.json", "application/json")
+            xml_path = work / "youtube_transcript.xml"
+            xml_path.write_text(transcript_xml(youtube_transcript["entries"]), encoding="utf-8")
+            xml_key = f"outputs/{job_id}/youtube_transcript.xml"
+            client.upload(xml_path, xml_key, "application/xml")
+            client.patch_job(
+                job_id,
+                stage=f"ใช้ซับจาก HAR ภาษา {youtube_transcript['language']} เวลาเดิมของวิดีโอ",
+                transcriptXmlKey=xml_key,
+                transcriptLanguage=str(youtube_transcript.get("language") or ""),
+                transcriptSource="bunny-har",
+            )
+            print(f"HAR signed transcript ready: {len(youtube_transcript['entries'])} lines", flush=True)
         input_url = f"{args.worker_url.rstrip('/')}/api/internal/file?key={quote(key, safe='')}"
         headers = f"x-worker-token: {args.token}\r\n"
     else:
@@ -230,12 +252,20 @@ def main() -> None:
         try:
             cookies_file = build_cookie_file()
             try:
-                youtube_transcript = extract_youtube_transcript(
-                    source_url,
-                    target_lang=str(job.get("targetLang") or "th"),
-                    source_lang=str(job.get("sourceLang") or "auto"),
-                    cookies_file=cookies_file,
-                )
+                caption_url = str(job.get("captionUrl") or "").strip()
+                if caption_url:
+                    youtube_transcript = extract_signed_youtube_transcript(
+                        caption_url,
+                        target_lang=str(job.get("targetLang") or "th"),
+                        expected_video_url=source_url,
+                    )
+                else:
+                    youtube_transcript = extract_youtube_transcript(
+                        source_url,
+                        target_lang=str(job.get("targetLang") or "th"),
+                        source_lang=str(job.get("sourceLang") or "auto"),
+                        cookies_file=cookies_file,
+                    )
                 full_json = work / "youtube_transcript.json"
                 full_json.write_text(json.dumps(youtube_transcript, ensure_ascii=False, indent=2), encoding="utf-8")
                 client.upload(full_json, f"temp/{job_id}/transcript/full.json", "application/json")

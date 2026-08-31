@@ -339,6 +339,65 @@ def _parse_vtt(raw: bytes) -> list[dict[str, Any]]:
     return entries
 
 
+def extract_signed_youtube_transcript(
+    signed_url: str,
+    target_lang: str = "th",
+    expected_video_url: str | None = None,
+) -> dict[str, Any]:
+    raw_url = str(signed_url or "").strip()
+    parsed = urlparse(raw_url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not (host == "youtube.com" or host.endswith(".youtube.com")) or parsed.path != "/api/timedtext":
+        raise RuntimeError("ลิงก์ซับจาก HAR ไม่ใช่ YouTube timedtext")
+    qs = parse_qs(parsed.query)
+    vid = str((qs.get("v") or [""])[0])
+    language = str((qs.get("lang") or [""])[0])
+    fmt = str((qs.get("fmt") or ["srv1"])[0]).lower()
+    if not vid or not language:
+        raise RuntimeError("ลิงก์ซับจาก HAR ขาดรหัสวิดีโอหรือภาษา")
+    if expected_video_url:
+        try:
+            expected = _video_id(expected_video_url)
+        except Exception:
+            expected = ""
+        if expected and expected != vid:
+            raise RuntimeError("HAR นี้ไม่ตรงกับลิงก์ YouTube ของงาน")
+
+    raw = _http_get(raw_url)
+    if fmt == "srv1":
+        entries = _parse_srv1(raw)
+    elif fmt == "json3":
+        entries = _parse_json3(raw)
+    elif fmt == "vtt":
+        entries = _parse_vtt(raw)
+    else:
+        entries = _parse_srv1(raw) or _parse_vtt(raw)
+        if not entries:
+            try:
+                root = ET.fromstring(raw.decode("utf-8", errors="replace"))
+                for node in root.findall(".//p"):
+                    text_value = _clean_text("".join(node.itertext()))
+                    if not text_value:
+                        continue
+                    start_ms = float(node.attrib.get("t") or 0)
+                    dur_ms = float(node.attrib.get("d") or 0)
+                    entries.append({"start": max(0.0, start_ms / 1000.0), "duration": max(0.05, dur_ms / 1000.0), "text": text_value})
+            except Exception:
+                pass
+    if not entries:
+        raise RuntimeError("signed subtitle จาก HAR ไม่มีข้อความ หรือหมดอายุแล้ว")
+    return {
+        "videoId": vid,
+        "title": "",
+        "language": language,
+        "targetLanguage": target_lang,
+        "targetReady": _base_lang(language) == _base_lang(target_lang),
+        "origin": "bunny-har-signed-timedtext",
+        "format": fmt,
+        "entries": entries,
+    }
+
+
 def extract_youtube_transcript(
     url: str,
     target_lang: str = "th",

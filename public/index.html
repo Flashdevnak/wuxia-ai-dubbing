@@ -90,6 +90,18 @@
                 <small id="uploadStatus">กำลังเตรียมไฟล์</small>
               </div>
             </div>
+
+            <div class="har-import" id="harImport">
+              <div class="har-copy">
+                <b>มี HAR จาก Bunny</b>
+                <small>เลือกไฟล์ HAR แล้วระบบจะหาซับที่ตรงกับภาษาพากย์ให้อัตโนมัติ ไฟล์ HAR จะถูกอ่านในเครื่องนี้</small>
+              </div>
+              <div class="har-actions">
+                <input id="harInput" class="har-file-input" type="file" accept=".har,application/json" />
+                <label for="harInput" class="btn ghost har-btn">เลือก HAR</label>
+                <span id="harStatus" class="har-status">ยังไม่ได้เลือก HAR</span>
+              </div>
+            </div>
           </div>
 
           <div class="option-grid">
@@ -136,7 +148,7 @@
     <b id="loadingPercent">0%</b>
   </div>
 
-  <script src="./app.js?v=20260830-controls1" defer></script>
+  <script src="./app.js?v=20260831-har1" defer></script>
   <script src="./performance.js?v=mobile-lite1" defer></script>
 </body>
 </html>

@@ -45,6 +45,21 @@ function workerAuthorized(request, env) {
   return Boolean(env.WORKER_SHARED_TOKEN && sameSecret(supplied, env.WORKER_SHARED_TOKEN));
 }
 
+function validCaptionUrl(value) {
+  if (!value) return true;
+  try {
+    const u = new URL(String(value));
+    const host = u.hostname.toLowerCase();
+    return u.protocol === 'https:'
+      && (host === 'youtube.com' || host.endsWith('.youtube.com'))
+      && u.pathname === '/api/timedtext'
+      && Boolean(u.searchParams.get('v'))
+      && Boolean(u.searchParams.get('lang'));
+  } catch {
+    return false;
+  }
+}
+
 function originAllowed(request, env) {
   const origin = request.headers.get('origin') || '';
   if (!origin) return true;
@@ -547,6 +562,7 @@ async function handleApi(request, env, url) {
       if (!src) return json({ error: 'uploaded file not found' }, 404);
     }
     if (body.sourceType === 'link' && !/^https?:\/\//i.test(body.sourceUrl || '')) return json({ error: 'invalid source url' }, 400);
+    if (body.captionUrl && !validCaptionUrl(body.captionUrl)) return json({ error: 'ลิงก์ซับจาก HAR ไม่ถูกต้อง' }, 400);
     if (body.jobType === 'transcript' && body.sourceType !== 'link') return json({ error: 'คำบรรยาย YouTube ต้องใช้ลิงก์' }, 400);
     const job = {
       id: crypto.randomUUID(),
@@ -563,6 +579,11 @@ async function handleApi(request, env, url) {
       keepMusic: body.keepMusic !== false,
       speakerSeparation: body.speakerSeparation === true,
       autoCleanup: body.autoCleanup !== false,
+      captionUrl: body.captionUrl || null,
+      captionSource: body.captionSource || null,
+      captionLanguage: body.captionLanguage || null,
+      captionFormat: body.captionFormat || null,
+      captionVideoId: body.captionVideoId || null,
       pauseRequested: false,
       retryCount: 0,
       status: 'queued',

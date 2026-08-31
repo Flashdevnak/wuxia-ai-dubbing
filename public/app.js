@@ -10,7 +10,7 @@ const LANGS = [
 ];
 
 const SUPPORTED_EXTS = new Set(['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v']);
-const state = { sourceMode: 'link', sourceKey: null, jobs: [], files: [], storage: null, progressFloor: {} };
+const state = { sourceMode: 'link', sourceKey: null, captionUrl: null, captionMeta: null, harSubs: [], harFileName: '', jobs: [], files: [], storage: null, progressFloor: {} };
 const IS_GITHUB_PAGES = location.hostname.endsWith('github.io');
 const API_BASE = window.WUXIA_API_BASE || '';
 const ACCESS_KEY_SESSION = 'wuxia-access-key-v2';
@@ -132,6 +132,115 @@ function showFileMeta(file) {
   if (!box) return;
   box.classList.remove('hidden');
   box.innerHTML = `<div><span>ชื่อไฟล์</span><b>${esc(file.name)}</b></div><div><span>ชนิดไฟล์</span><b>${esc(extLabel(file.name))}</b></div><div><span>ขนาด</span><b>${fmtBytes(file.size)}</b></div>`;
+}
+
+function baseLang(value) {
+  return String(value || '').toLowerCase().split('-')[0].split('_')[0];
+}
+
+function youtubeVideoId(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const u = new URL(raw);
+    const host = u.hostname.toLowerCase();
+    if (host === 'youtu.be' || host === 'www.youtu.be') return u.pathname.split('/').filter(Boolean)[0] || '';
+    if (host.endsWith('youtube.com')) {
+      const id = u.searchParams.get('v');
+      if (id) return id;
+      const parts = u.pathname.split('/').filter(Boolean);
+      if (parts.length > 1 && ['shorts', 'embed', 'live'].includes(parts[0])) return parts[1];
+    }
+  } catch {}
+  return '';
+}
+
+function decodeHarContent(content) {
+  let raw = String(content?.text || '');
+  if (String(content?.encoding || '').toLowerCase() !== 'base64') return raw;
+  const binary = atob(raw.replace(/\s+/g, ''));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new TextDecoder('utf-8').decode(bytes);
+}
+
+function normalizedHarSubs(subs) {
+  const out = [];
+  for (const item of Array.isArray(subs) ? subs : []) {
+    const raw = String(item?.url || '').trim();
+    if (!raw) continue;
+    try {
+      const u = new URL(raw);
+      const host = u.hostname.toLowerCase();
+      if (!(host === 'youtube.com' || host.endsWith('.youtube.com')) || u.pathname !== '/api/timedtext') continue;
+      const videoId = String(u.searchParams.get('v') || '');
+      const lang = String(u.searchParams.get('lang') || '');
+      const fmt = String(u.searchParams.get('fmt') || item?.ext || '').toLowerCase();
+      if (!videoId || !lang) continue;
+      out.push({ url: u.toString(), videoId, lang, fmt, name: String(item?.name || lang) });
+    } catch {}
+  }
+  return out;
+}
+
+function refreshHarCaption({ quiet = false } = {}) {
+  if (!state.harSubs.length) return null;
+  const target = baseLang($('#targetLang')?.value || 'th');
+  const source = baseLang($('#sourceLang')?.value || 'auto');
+  const formatRank = fmt => ({ srv1: 0, vtt: 1, srv2: 2, json3: 3, ttml: 4 }[fmt] ?? 9);
+  const ranked = [...state.harSubs].sort((a, b) => formatRank(a.fmt) - formatRank(b.fmt));
+  let chosen = ranked.find(x => baseLang(x.lang) === target);
+  if (!chosen && source && source !== 'auto') chosen = ranked.find(x => baseLang(x.lang) === source);
+  chosen ||= ranked[0] || null;
+  if (!chosen) {
+    state.captionUrl = null;
+    state.captionMeta = null;
+    if ($('#harStatus')) { $('#harStatus').textContent = 'ไม่พบลิงก์ซับที่ใช้ได้ใน HAR'; $('#harStatus').className = 'har-status error'; }
+    return null;
+  }
+
+  const linkId = youtubeVideoId($('#videoUrl')?.value || '');
+  if (linkId && chosen.videoId !== linkId) {
+    state.captionUrl = null;
+    state.captionMeta = chosen;
+    if ($('#harStatus')) { $('#harStatus').textContent = `HAR เป็นวิดีโอ ${chosen.videoId} แต่ลิงก์ที่วางเป็น ${linkId}`; $('#harStatus').className = 'har-status error'; }
+    if (!quiet) throw new Error('HAR นี้ไม่ตรงกับลิงก์ YouTube ที่วางไว้');
+    return null;
+  }
+
+  state.captionUrl = chosen.url;
+  state.captionMeta = chosen;
+  const exact = baseLang(chosen.lang) === target;
+  if ($('#harStatus')) {
+    $('#harStatus').textContent = exact
+      ? `พร้อมใช้ ซับ ${langLabel(chosen.lang)} รูปแบบ ${chosen.fmt || 'timedtext'}`
+      : `พบซับ ${langLabel(chosen.lang)} ระบบจะแปลเป็น ${langLabel(target)}`;
+    $('#harStatus').className = 'har-status ready';
+  }
+  return chosen;
+}
+
+async function importHar(file) {
+  if (!file) return;
+  if (!/\.har$/i.test(file.name) && file.type && !String(file.type).includes('json')) throw new Error('กรุณาเลือกไฟล์ .har');
+  const root = JSON.parse(await file.text());
+  const entries = Array.isArray(root?.log?.entries) ? root.log.entries : [];
+  const found = [];
+  for (const entry of entries) {
+    const content = entry?.response?.content;
+    if (!content?.text) continue;
+    let body;
+    try { body = JSON.parse(decodeHarContent(content)); } catch { continue; }
+    if (Array.isArray(body?.subs)) found.push(...normalizedHarSubs(body.subs));
+  }
+  const unique = [...new Map(found.map(x => [x.url, x])).values()];
+  if (!unique.length) throw new Error('ไม่พบ signed subtitle ของ YouTube ใน HAR นี้');
+  state.harSubs = unique;
+  state.harFileName = file.name;
+  const selected = refreshHarCaption();
+  if (!selected) throw new Error('ไม่พบซับที่ใช้ได้ใน HAR นี้');
+  if (state.sourceMode === 'link' && !state.sourceKey) setMode('upload');
+  if ($('#message')) $('#message').textContent = `✓ อ่าน HAR แล้ว พบซับ ${langLabel(selected.lang)} พร้อมใช้ เลือกวิดีโอต้นฉบับเพื่ออัปโหลดแล้วเริ่มพากย์ได้เลย`;
 }
 
 function xhrMultipartChunk({ key, uploadId, partNumber, chunk, file, overallStart }) {
@@ -283,9 +392,21 @@ async function createJob() {
     keepMusic: $('#keepMusic')?.checked === true,
     speakerSeparation: $('#speakerSep')?.checked === true,
     autoCleanup: $('#autoCleanup')?.checked === true,
+    captionUrl: state.captionUrl || null,
+    captionSource: state.captionUrl ? 'bunny-har' : null,
+    captionLanguage: state.captionMeta?.lang || null,
+    captionFormat: state.captionMeta?.fmt || null,
+    captionVideoId: state.captionMeta?.videoId || null,
   };
   if (payload.sourceType === 'link' && !payload.sourceUrl) throw new Error('กรุณาวางลิงก์ก่อน');
   if (payload.sourceType === 'upload' && !payload.sourceKey) throw new Error('กรุณาอัปโหลดไฟล์ให้เสร็จก่อน');
+  if (payload.captionUrl) {
+    refreshHarCaption();
+    payload.captionUrl = state.captionUrl;
+    payload.captionLanguage = state.captionMeta?.lang || null;
+    payload.captionFormat = state.captionMeta?.fmt || null;
+    payload.captionVideoId = state.captionMeta?.videoId || null;
+  }
 
   showLoader('กำลังสร้างงานพากย์', 'กำลังส่งงานเข้าคิว', 2);
   const data = await api('/api/jobs', { method: 'POST', body: JSON.stringify(payload) });
@@ -317,6 +438,11 @@ async function extractLinkTranscript() {
     keepMusic: false,
     speakerSeparation: false,
     autoCleanup: false,
+    captionUrl: state.captionUrl || null,
+    captionSource: state.captionUrl ? 'bunny-har' : null,
+    captionLanguage: state.captionMeta?.lang || null,
+    captionFormat: state.captionMeta?.fmt || null,
+    captionVideoId: state.captionMeta?.videoId || null,
   };
 
   showLoader('กำลังดึงคำบรรยาย', 'กำลังอ่านซับและเวลาเริ่ม–จบจาก YouTube', 5);
@@ -460,6 +586,20 @@ function bind() {
   $('#linkCard')?.addEventListener('click', () => setMode('link'));
   $('#uploadCard')?.addEventListener('click', () => setMode('upload'));
   $('#processingMode')?.addEventListener('change', updateSpeedNote);
+  $('#targetLang')?.addEventListener('change', () => { try { refreshHarCaption({ quiet: true }); } catch {} });
+  $('#sourceLang')?.addEventListener('change', () => { try { refreshHarCaption({ quiet: true }); } catch {} });
+  $('#videoUrl')?.addEventListener('input', () => { if (state.harSubs.length) refreshHarCaption({ quiet: true }); });
+  $('#harInput')?.addEventListener('change', async e => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    if ($('#harStatus')) { $('#harStatus').textContent = 'กำลังอ่าน HAR'; $('#harStatus').className = 'har-status'; }
+    try { await importHar(f); }
+    catch (err) {
+      state.captionUrl = null; state.captionMeta = null; state.harSubs = [];
+      if ($('#harStatus')) { $('#harStatus').textContent = err.message; $('#harStatus').className = 'har-status error'; }
+      if ($('#message')) $('#message').textContent = err.message;
+    }
+  });
 
   $('#analyzeLinkBtn')?.addEventListener('click', async () => {
     try { await extractLinkTranscript(); }
