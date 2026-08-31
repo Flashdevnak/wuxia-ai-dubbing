@@ -10,7 +10,7 @@ const LANGS = [
 ];
 
 const SUPPORTED_EXTS = new Set(['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v']);
-const state = { sourceMode: 'link', sourceKey: null, captionUrl: null, captionMeta: null, harSubs: [], harFileName: '', jobs: [], files: [], storage: null, progressFloor: {} };
+const state = { sourceMode: 'link', sourceKey: null, captionUrl: null, captionKey: null, captionCacheUrl: null, captionMeta: null, harSubs: [], harFileName: '', jobs: [], files: [], storage: null, progressFloor: {} };
 const IS_GITHUB_PAGES = location.hostname.endsWith('github.io');
 const API_BASE = window.WUXIA_API_BASE || '';
 const ACCESS_KEY_SESSION = 'wuxia-access-key-v2';
@@ -208,6 +208,7 @@ function refreshHarCaption({ quiet = false } = {}) {
     return null;
   }
 
+  if (state.captionCacheUrl !== chosen.url) { state.captionKey = null; state.captionCacheUrl = null; }
   state.captionUrl = chosen.url;
   state.captionMeta = chosen;
   const exact = baseLang(chosen.lang) === target;
@@ -218,6 +219,40 @@ function refreshHarCaption({ quiet = false } = {}) {
     $('#harStatus').className = 'har-status ready';
   }
   return chosen;
+}
+
+async function cacheSelectedHarCaption() {
+  if (!state.captionUrl || !state.captionMeta) return null;
+  if (state.captionKey && state.captionCacheUrl === state.captionUrl) return state.captionKey;
+  const status = $('#harStatus');
+  const before = status?.textContent || '';
+  if (status) { status.textContent = 'กำลังเก็บซับไว้ก่อนลิงก์หมดอายุ'; status.className = 'har-status'; }
+  try {
+    const data = await api('/api/captions/import', {
+      method: 'POST',
+      body: JSON.stringify({
+        captionUrl: state.captionUrl,
+        targetLang: $('#targetLang')?.value || 'th',
+        expectedVideoId: state.captionMeta.videoId || youtubeVideoId($('#videoUrl')?.value || ''),
+      }),
+    });
+    state.captionKey = data.captionKey || null;
+    state.captionCacheUrl = state.captionKey ? state.captionUrl : null;
+    if (status) {
+      status.textContent = `เก็บซับไว้แล้ว ${Number(data.lines || 0).toLocaleString('th-TH')} บรรทัด ใช้ได้แม้ลิงก์ HAR หมดอายุ`;
+      status.className = 'har-status ready';
+    }
+    return state.captionKey;
+  } catch (err) {
+    state.captionKey = null;
+    state.captionCacheUrl = null;
+    if (status) {
+      status.textContent = `${before || 'พบซับแล้ว'} แต่ยังเก็บสำรองไม่ได้ ระบบจะลองอ่านตอนเริ่มงาน`;
+      status.className = 'har-status error';
+    }
+    console.warn('caption cache failed', err);
+    return null;
+  }
 }
 
 async function importHar(file) {
@@ -239,8 +274,11 @@ async function importHar(file) {
   state.harFileName = file.name;
   const selected = refreshHarCaption();
   if (!selected) throw new Error('ไม่พบซับที่ใช้ได้ใน HAR นี้');
+  await cacheSelectedHarCaption();
   if (state.sourceMode === 'link' && !state.sourceKey) setMode('upload');
-  if ($('#message')) $('#message').textContent = `✓ อ่าน HAR แล้ว พบซับ ${langLabel(selected.lang)} พร้อมใช้ เลือกวิดีโอต้นฉบับเพื่ออัปโหลดแล้วเริ่มพากย์ได้เลย`;
+  if ($('#message')) $('#message').textContent = state.captionKey
+    ? `✓ อ่าน HAR แล้ว และเก็บซับ ${langLabel(selected.lang)} ไว้แล้ว เลือกวิดีโอต้นฉบับเพื่ออัปโหลดได้เลย`
+    : `✓ อ่าน HAR แล้ว พบซับ ${langLabel(selected.lang)} เลือกวิดีโอต้นฉบับเพื่ออัปโหลดได้เลย`;
 }
 
 function xhrMultipartChunk({ key, uploadId, partNumber, chunk, file, overallStart }) {
@@ -379,6 +417,7 @@ function updateSpeedNote() {
 }
 
 async function createJob() {
+  if (state.captionUrl) await cacheSelectedHarCaption();
   const payload = {
     title: 'งานพากย์ ' + new Date().toLocaleString('th-TH'),
     sourceType: state.sourceMode,
@@ -393,6 +432,7 @@ async function createJob() {
     speakerSeparation: $('#speakerSep')?.checked === true,
     autoCleanup: $('#autoCleanup')?.checked === true,
     captionUrl: state.captionUrl || null,
+    captionKey: state.captionKey || null,
     captionSource: state.captionUrl ? 'bunny-har' : null,
     captionLanguage: state.captionMeta?.lang || null,
     captionFormat: state.captionMeta?.fmt || null,
@@ -417,6 +457,7 @@ async function createJob() {
 }
 
 async function extractLinkTranscript() {
+  if (state.captionUrl) await cacheSelectedHarCaption();
   const sourceUrl = $('#videoUrl')?.value.trim();
   if (!sourceUrl) throw new Error('กรุณาวางลิงก์ YouTube ก่อน');
   try {
@@ -439,6 +480,7 @@ async function extractLinkTranscript() {
     speakerSeparation: false,
     autoCleanup: false,
     captionUrl: state.captionUrl || null,
+    captionKey: state.captionKey || null,
     captionSource: state.captionUrl ? 'bunny-har' : null,
     captionLanguage: state.captionMeta?.lang || null,
     captionFormat: state.captionMeta?.fmt || null,
@@ -586,8 +628,8 @@ function bind() {
   $('#linkCard')?.addEventListener('click', () => setMode('link'));
   $('#uploadCard')?.addEventListener('click', () => setMode('upload'));
   $('#processingMode')?.addEventListener('change', updateSpeedNote);
-  $('#targetLang')?.addEventListener('change', () => { try { refreshHarCaption({ quiet: true }); } catch {} });
-  $('#sourceLang')?.addEventListener('change', () => { try { refreshHarCaption({ quiet: true }); } catch {} });
+  $('#targetLang')?.addEventListener('change', async () => { try { refreshHarCaption({ quiet: true }); await cacheSelectedHarCaption(); } catch {} });
+  $('#sourceLang')?.addEventListener('change', async () => { try { refreshHarCaption({ quiet: true }); await cacheSelectedHarCaption(); } catch {} });
   $('#videoUrl')?.addEventListener('input', () => { if (state.harSubs.length) refreshHarCaption({ quiet: true }); });
   $('#harInput')?.addEventListener('change', async e => {
     const f = e.target.files?.[0];

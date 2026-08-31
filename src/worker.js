@@ -20,7 +20,7 @@ import {
   writeJob,
   listJobs,
 } from './storage.js';
-import { fetchYouTubeTranscript } from './youtube.js';
+import { fetchYouTubeTranscript, fetchSignedYouTubeTranscript } from './youtube.js';
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8' };
 
@@ -491,6 +491,31 @@ async function handleApi(request, env, url) {
   if (p.startsWith('/api/internal/')) return handleInternal(request, env, url);
   if (!publicAuthorized(request, env, url)) return json({ error: 'กรุณาใส่รหัสสำนัก' }, 401);
 
+  if (p === '/api/captions/import' && request.method === 'POST') {
+    const body = await request.json();
+    if (!validCaptionUrl(body.captionUrl)) return json({ error: 'ลิงก์ซับจาก HAR ไม่ถูกต้อง' }, 400);
+    try {
+      const transcript = await fetchSignedYouTubeTranscript(
+        String(body.captionUrl || ''),
+        String(body.targetLang || 'th'),
+        String(body.expectedVideoId || ''),
+      );
+      const key = `temp/caption-imports/${crypto.randomUUID()}.json`;
+      await uploadSmallText(env, key, JSON.stringify(transcript), 'application/json');
+      return json({
+        ok: true,
+        captionKey: key,
+        videoId: transcript.videoId,
+        language: transcript.language,
+        targetReady: transcript.targetReady,
+        format: transcript.format,
+        lines: transcript.entries.length,
+      });
+    } catch (err) {
+      return json({ error: err?.message || String(err) }, 502);
+    }
+  }
+
   if (p === '/api/storage' && request.method === 'GET') return json(await storageInfo(env));
 
   if (p === '/api/files' && request.method === 'GET') {
@@ -563,6 +588,11 @@ async function handleApi(request, env, url) {
     }
     if (body.sourceType === 'link' && !/^https?:\/\//i.test(body.sourceUrl || '')) return json({ error: 'invalid source url' }, 400);
     if (body.captionUrl && !validCaptionUrl(body.captionUrl)) return json({ error: 'ลิงก์ซับจาก HAR ไม่ถูกต้อง' }, 400);
+    if (body.captionKey) {
+      if (!String(body.captionKey).startsWith('temp/caption-imports/')) return json({ error: 'ไฟล์ซับสำรองไม่ถูกต้อง' }, 400);
+      const cachedCaption = await resolveLogical(env, String(body.captionKey));
+      if (!cachedCaption?.id) return json({ error: 'ไม่พบซับที่บันทึกไว้ กรุณาเลือก HAR ใหม่' }, 404);
+    }
     if (body.jobType === 'transcript' && body.sourceType !== 'link') return json({ error: 'คำบรรยาย YouTube ต้องใช้ลิงก์' }, 400);
     const job = {
       id: crypto.randomUUID(),
@@ -580,6 +610,7 @@ async function handleApi(request, env, url) {
       speakerSeparation: body.speakerSeparation === true,
       autoCleanup: body.autoCleanup !== false,
       captionUrl: body.captionUrl || null,
+      captionKey: body.captionKey || null,
       captionSource: body.captionSource || null,
       captionLanguage: body.captionLanguage || null,
       captionFormat: body.captionFormat || null,

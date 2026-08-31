@@ -476,6 +476,36 @@ async function signedYouTubeTranscript(id, targetLang, sourceLang) {
   return null;
 }
 
+export async function fetchSignedYouTubeTranscript(signedUrl, targetLang = 'th', expectedVideoId = '') {
+  let u;
+  try { u = new URL(String(signedUrl || '').trim()); } catch { throw new Error('ลิงก์ซับจาก HAR ไม่ถูกต้อง'); }
+  const host = u.hostname.toLowerCase();
+  if (u.protocol !== 'https:' || !(host === 'youtube.com' || host.endsWith('.youtube.com')) || u.pathname !== '/api/timedtext') {
+    throw new Error('ลิงก์ซับจาก HAR ไม่ใช่ YouTube timedtext');
+  }
+  const id = String(u.searchParams.get('v') || '');
+  const language = String(u.searchParams.get('lang') || '');
+  const format = String(u.searchParams.get('fmt') || 'srv1').toLowerCase();
+  if (!id || !language) throw new Error('ลิงก์ซับจาก HAR ขาดรหัสวิดีโอหรือภาษา');
+  if (expectedVideoId && String(expectedVideoId) !== id) throw new Error('HAR นี้ไม่ตรงกับวิดีโอที่วางไว้');
+
+  let raw;
+  try { raw = await getText(u.toString(), {}, 15000); }
+  catch (err) { throw new Error(`เปิดซับจาก HAR ไม่สำเร็จ อาจหมดอายุแล้ว (${err?.message || err})`); }
+  const entries = parseCaption(raw);
+  if (!entries.length) throw new Error('ซับจาก HAR ไม่มีข้อความ หรือหมดอายุแล้ว');
+  return {
+    videoId: id,
+    title: '',
+    language,
+    targetLanguage: targetLang,
+    targetReady: baseLang(language) === baseLang(targetLang),
+    origin: 'bunny-har-signed-timedtext',
+    format,
+    entries,
+  };
+}
+
 export async function fetchYouTubeTranscript(sourceUrl, targetLang = 'th', sourceLang = 'auto') {
   const id = videoId(sourceUrl);
 

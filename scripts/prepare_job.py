@@ -222,7 +222,13 @@ def main() -> None:
         if not key:
             raise RuntimeError("Uploaded job has no sourceKey")
         caption_url = str(job.get("captionUrl") or "").strip()
-        if caption_url:
+        caption_key = str(job.get("captionKey") or "").strip()
+        if caption_key:
+            cached_caption = work / "cached_har_transcript.json"
+            client.download(caption_key, cached_caption)
+            youtube_transcript = json.loads(cached_caption.read_text(encoding="utf-8"))
+            print(f"Using cached HAR transcript: {len(youtube_transcript.get('entries') or [])} lines", flush=True)
+        elif caption_url:
             youtube_transcript = extract_signed_youtube_transcript(
                 caption_url,
                 target_lang=str(job.get("targetLang") or "th"),
@@ -253,7 +259,13 @@ def main() -> None:
             cookies_file = build_cookie_file()
             try:
                 caption_url = str(job.get("captionUrl") or "").strip()
-                if caption_url:
+                caption_key = str(job.get("captionKey") or "").strip()
+                if caption_key:
+                    cached_caption = work / "cached_har_transcript.json"
+                    client.download(caption_key, cached_caption)
+                    youtube_transcript = json.loads(cached_caption.read_text(encoding="utf-8"))
+                    print(f"Using cached HAR transcript: {len(youtube_transcript.get('entries') or [])} lines", flush=True)
+                elif caption_url:
                     youtube_transcript = extract_signed_youtube_transcript(
                         caption_url,
                         target_lang=str(job.get("targetLang") or "th"),

@@ -86,7 +86,13 @@ def main() -> None:
     try:
         client.patch_job(job_id, status="processing", progress=10, stage="กำลังอ่านคำบรรยายจาก YouTube")
         caption_url = str(job.get("captionUrl") or "").strip()
-        if caption_url:
+        caption_key = str(job.get("captionKey") or "").strip()
+        if caption_key:
+            cached_caption = Path("cached_har_transcript.json")
+            client.download(caption_key, cached_caption)
+            data = json.loads(cached_caption.read_text(encoding="utf-8"))
+            print(f"Cached HAR caption source: {data.get('language')} {len(data.get('entries') or [])} lines")
+        elif caption_url:
             data = extract_signed_youtube_transcript(
                 caption_url,
                 target_lang=target_lang,
