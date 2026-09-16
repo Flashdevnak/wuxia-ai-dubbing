@@ -27,6 +27,7 @@ jobs:
             scripts/worker_client.py \
             scripts/prepare_job.py \
             scripts/dub_chunk.py \
+            scripts/dub_guard.py \
             scripts/finalize_job.py
       - name: Verify required files
         run: |
@@ -37,8 +38,14 @@ jobs:
           test -f src/storage.js
           test -f wrangler.jsonc
           test -f requirements.txt
+          test -f scripts/dub_guard.py
           test -f .github/workflows/dubbing.yml
           test -f .github/workflows/deploy-cloudflare.yml
+      - name: Verify guarded dubbing workflow
+        run: |
+          grep -q "python scripts/dub_guard.py" .github/workflows/dubbing.yml
+          grep -q "Noto Sans Thai" .github/workflows/dubbing.yml
+          grep -q "AUDIO_PROFILE_VERSION = 4" scripts/dub_guard.py
       - name: Cloudflare Worker bundle dry-run
         run: |
           npm install
