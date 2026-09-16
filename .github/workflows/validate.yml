@@ -2,7 +2,7 @@ name: Validate web project
 
 on:
   push:
-    branches: [main, codex/full-auto-dubbing-v1, codex/r3-runtime-integration, codex/separate-audio-human-ui, codex/parallel-upload-acceleration, codex/mobile-background-upload-v2, codex/separate-audio-pair-fix, codex/mobile-upload-stall-watchdog-v3]
+    branches: [main, codex/full-auto-dubbing-v1, codex/r3-runtime-integration, codex/separate-audio-human-ui, codex/parallel-upload-acceleration, codex/mobile-background-upload-v2, codex/separate-audio-pair-fix, codex/mobile-upload-stall-watchdog-v3, codex/studio-ui-rebuild-v2]
   pull_request:
 
 jobs:
@@ -23,6 +23,7 @@ jobs:
           node --check public/full-auto.js
           node --check public/r3-studio.js
           node --check public/studio-ui.js
+          node --check public/studio-v2.js
           node --check public/upload-fast.js
           node --check public/mobile-upload-recovery.js
           node --check public/pair-recovery.js
@@ -34,6 +35,22 @@ jobs:
           node --check src/worker-pairfix.js
           node --check src/storage.js
           node --check src/youtube.js
+      - name: Studio V2 UX contract
+        run: |
+          test -f public/studio-v2.js
+          test -f public/studio-v2.css
+          grep -q "สร้างงานพากย์ไทย" public/index.html
+          grep -q "projectSlot" public/index.html
+          grep -q "toastHost" public/index.html
+          grep -q "phase-strip" public/studio-v2.css
+          grep -q "clearProjectIdentity" public/studio-v2.js
+          grep -q "setDefaultMode" public/studio-v2.js
+          grep -q "decorateAllJobs" public/studio-v2.js
+          grep -q "studio-v2.js" public/index.html
+          if grep -Eq '(src|href)="[^\"]+\?v=' public/index.html; then
+            echo "Studio HTML still contains version query parameters" >&2
+            exit 1
+          fi
       - name: Mobile Background Upload V3 contract
         run: node scripts/test_mobile_background_upload.mjs
       - name: Separate Audio Pair Recovery contract
@@ -79,6 +96,8 @@ jobs:
           test -f public/r3-studio.css
           test -f public/studio-ui.js
           test -f public/studio-ui.css
+          test -f public/studio-v2.js
+          test -f public/studio-v2.css
           test -f public/upload-fast.js
           test -f public/mobile-upload-recovery.js
           test -f public/pair-recovery.js

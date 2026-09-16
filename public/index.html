@@ -3,152 +3,190 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#100403" />
+  <meta name="theme-color" content="#111210" />
   <meta http-equiv="cache-control" content="no-cache, no-store, must-revalidate" />
-  <title>ยุทธภพ พากย์เสียง</title>
-  <link rel="stylesheet" href="./styles.css?v=flame3" />
-  <link rel="stylesheet" href="./performance.css?v=mobile-lite1" />
+  <title>ยุทธภพ สตูดิโอพากย์ไทย</title>
+  <link rel="stylesheet" href="./r3-studio.css" />
+  <link rel="stylesheet" href="./studio-ui.css" />
+  <link rel="stylesheet" href="./studio-v2.css" />
+  <!-- full-auto.css intentionally omitted from the streamlined studio -->
 </head>
 <body>
-  <div class="scene" aria-hidden="true">
-    <div class="fire-horizon"></div>
-    <div class="fire-glow fire-a"></div>
-    <div class="fire-glow fire-b"></div>
-    <div class="smoke smoke-a"></div>
-    <div class="smoke smoke-b"></div>
-    <div id="sparkField" class="spark-field"></div>
+  <div class="studio-app">
+    <header class="studio-header">
+      <div class="studio-brand">
+        <strong>ยุทธภพ สตูดิโอ</strong>
+        <span>พากย์วิดีโอเป็นภาษาไทย</span>
+      </div>
+      <div class="studio-head-tools">
+        <div class="head-storage" aria-label="พื้นที่ใช้งาน">
+          <span>พื้นที่</span>
+          <b id="topStorage">0.00 GB</b>
+          <i><em id="topStorageBar"></em></i>
+        </div>
+        <span id="deployMode" class="system-pill">พร้อมใช้งาน</span>
+        <button id="refreshBtn" class="plain-icon-btn" type="button">รีเฟรช</button>
+      </div>
+    </header>
+
+    <div class="studio-layout">
+      <aside class="studio-nav" id="sidebar" aria-label="เมนูหลัก">
+        <button class="nav-item active" data-page="home">สร้างงาน</button>
+        <button class="nav-item" data-page="jobs">งานพากย์</button>
+        <button class="nav-item" data-page="files">ไฟล์</button>
+        <button class="nav-item" data-page="storage">พื้นที่</button>
+      </aside>
+
+      <main class="studio-main">
+        <section class="page active" data-page-panel="home">
+          <div class="page-intro">
+            <div>
+              <span class="page-kicker">NEW DUB</span>
+              <h1>สร้างงานพากย์ไทย</h1>
+              <p>ตั้งชื่องาน เลือกวิดีโอ ตรวจเสียง และเริ่มพากย์จากหน้าเดียว</p>
+            </div>
+            <div class="flow-summary" aria-label="ขั้นตอนงาน">
+              <span>1 ตั้งชื่องาน</span><span>2 เลือกไฟล์</span><span>3 ตั้งค่า</span><span>4 เริ่มพากย์</span>
+            </div>
+          </div>
+
+          <div class="create-stack">
+            <section class="workflow-card project-card">
+              <div class="step-head"><span class="step-no">01</span><div><h2>ชื่องาน</h2><p>ชื่อเรื่อง Season และ EP ใช้เฉพาะงานนี้ เมื่อสร้างงานแล้วช่องจะเริ่มใหม่</p></div></div>
+              <div id="projectSlot" class="project-slot"><div class="slot-loading">กำลังเตรียมช่องชื่องาน</div></div>
+            </section>
+
+            <section class="workflow-card media-card">
+              <div class="step-head"><span class="step-no">02</span><div><h2>วิดีโอและเสียงต้นฉบับ</h2><p>อัปโหลดจากเครื่องเป็นทางหลัก รองรับวิดีโอไม่มีเสียงและไฟล์เสียงแยก</p></div></div>
+
+              <button class="source-card primary-source selected" id="uploadCard" type="button">
+                <div><b>อัปโหลดวิดีโอจากเครื่อง</b><small>MP4, MOV, MKV, WEBM, AVI หรือ M4V</small></div>
+                <span class="source-tag">แนะนำ</span>
+              </button>
+
+              <div class="source-box">
+                <div id="fileInputWrap" class="file-drop">
+                  <input id="fileInput" type="file" accept="video/*,.mp4,.mov,.mkv,.webm,.avi,.m4v" />
+                  <label for="fileInput" class="file-picker">
+                    <b>เลือกไฟล์วิดีโอ</b>
+                    <span>แตะเพื่อเลือกไฟล์จากเครื่อง</span>
+                    <small>ไฟล์ขนาดใหญ่จะอัปโหลดแบบแบ่งส่วนและทำต่อจากจุดเดิมได้</small>
+                  </label>
+                  <div id="fileMeta" class="file-meta-card hidden"></div>
+                  <div id="uploadProgress" class="upload-progress hidden">
+                    <div class="progress-head"><span id="uploadName">กำลังอัปโหลด</span><b id="uploadPct">0%</b></div>
+                    <div class="sword-progress upload-sword"><i><em id="uploadBar"></em></i><span class="sword-hilt"></span></div>
+                    <small id="uploadStatus">กำลังเตรียมไฟล์</small>
+                  </div>
+                </div>
+
+                <details class="advanced-source">
+                  <summary>ใช้ลิงก์ YouTube แทน</summary>
+                  <p>เป็นทางทดลอง YouTube อาจปฏิเสธการเชื่อมต่อจากเซิร์ฟเวอร์ หากไม่สำเร็จให้กลับมาอัปโหลดไฟล์</p>
+                  <button class="source-card secondary-source" id="linkCard" type="button"><div><b>ใช้ลิงก์ YouTube</b><small>ทดลองดึงคำบรรยายหรือเริ่มงานจากลิงก์</small></div></button>
+                  <div id="linkInputWrap" class="input-row hidden">
+                    <input id="videoUrl" type="url" inputmode="url" autocomplete="off" placeholder="วางลิงก์ YouTube" />
+                    <button id="analyzeLinkBtn" class="btn ghost" type="button">ดึงคำบรรยาย</button>
+                  </div>
+                  <div class="har-import" id="harImport">
+                    <div class="har-copy"><b>มีไฟล์ HAR</b><small>ใช้เฉพาะกรณีที่มีคำบรรยายจากเบราว์เซอร์อยู่แล้ว</small></div>
+                    <div class="har-actions">
+                      <input id="harInput" class="har-file-input" type="file" accept=".har,application/json" />
+                      <label for="harInput" class="btn ghost har-btn">เลือก HAR</label>
+                      <span id="harStatus" class="har-status">ยังไม่ได้เลือก</span>
+                    </div>
+                  </div>
+                </details>
+              </div>
+            </section>
+
+            <section class="workflow-card settings-card">
+              <div class="step-head"><span class="step-no">03</span><div><h2>ตั้งค่าพากย์</h2><p>ค่าที่ใช้บ่อยถูกเปิดไว้แล้ว ปรับเฉพาะที่ต้องการ</p></div></div>
+              <div class="option-grid">
+                <label><span>ภาษาต้นฉบับ</span><select id="sourceLang"></select></label>
+                <label><span>ภาษาพากย์</span><select id="targetLang"></select></label>
+                <label><span>เสียงพากย์</span><select id="voiceMode"><option value="auto">เลือกอัตโนมัติ</option><option value="male">ผู้ชาย</option><option value="female">ผู้หญิง</option><option value="narrator">ผู้บรรยาย</option></select></label>
+                <label><span>รูปแบบประมวลผล</span><select id="processingMode"><option value="fast" selected>เร็ว</option><option value="balanced">สมดุล</option><option value="quality">คุณภาพสูง</option></select></label>
+              </div>
+              <div class="speed-note" id="speedNote"><b>โหมดเร็ว</b><span>แบ่งงานเป็นช่วงและประมวลผลพร้อมกัน</span></div>
+              <div class="toggles">
+                <label class="toggle"><input id="subtitles" type="checkbox" checked /><span></span><b>สร้างคำบรรยายไทย</b></label>
+                <label class="toggle"><input id="keepMusic" type="checkbox" checked /><span></span><b>เก็บเพลงและเสียงประกอบ</b></label>
+                <label class="toggle"><input id="autoCleanup" type="checkbox" checked /><span></span><b>ลบไฟล์ชั่วคราวอัตโนมัติ</b></label>
+              </div>
+              <details class="advanced-settings">
+                <summary>ตั้งค่าขั้นสูง</summary>
+                <label class="toggle"><input id="speakerSep" type="checkbox" /><span></span><b>แยกเสียงตามผู้พูดเมื่อระบบตรวจจับได้</b></label>
+              </details>
+            </section>
+
+            <section class="workflow-card launch-card">
+              <div class="step-head"><span class="step-no">04</span><div><h2>เริ่มงาน</h2><p>ระบบจะตรวจไฟล์ ถอดคำ แปล พากย์ รวมวิดีโอ และตรวจคุณภาพก่อนจบงาน</p></div></div>
+              <button id="startBtn" class="btn primary big" type="button"><b>เริ่มงานพากย์</b><small>ติดตามสถานะได้ในรายการงานด้านล่าง</small></button>
+              <div id="message" class="message sr-only" role="status" aria-live="polite"></div>
+            </section>
+          </div>
+
+          <section class="home-jobs-section">
+            <div class="section-title"><div><h2>งานล่าสุด</h2><p>สถานะสำคัญจะอยู่ที่นี่ ไม่ต้องย้อนขึ้นไปดูข้อความแจ้งเตือน</p></div><button id="seeJobs" class="text-btn" type="button">ดูทั้งหมด</button></div>
+            <div id="homeJobs" class="job-list empty-state">ยังไม่มีงานพากย์</div>
+          </section>
+        </section>
+
+        <section class="page" data-page-panel="jobs">
+          <div class="page-head"><span class="page-kicker">JOBS</span><h1>งานพากย์ทั้งหมด</h1><p>ดูสถานะ ทำต่อ ลองใหม่ ดาวน์โหลด หรือลบงานจากที่เดียว</p></div>
+          <div id="jobsList" class="job-list empty-state">ยังไม่มีงาน</div>
+        </section>
+
+        <section class="page" data-page-panel="files">
+          <div class="page-head"><span class="page-kicker">FILES</span><h1>ไฟล์ต้นฉบับ</h1><p>ตรวจสอบไฟล์ที่อัปโหลดและลบไฟล์ที่ไม่ใช้แล้ว</p></div>
+          <div id="filesList" class="file-list empty-state">ยังไม่มีไฟล์</div>
+          <div id="resultsList" class="hidden"></div>
+        </section>
+
+        <section class="page" data-page-panel="storage">
+          <div class="page-head"><span class="page-kicker">STORAGE</span><h1>พื้นที่ใช้งาน</h1><p>ล้างเฉพาะส่วนที่ต้องการ ระบบแสดงขนาดก่อนลบ</p></div>
+          <div class="storage-cards">
+            <div class="storage-stat"><span>ใช้ทั้งหมด</span><b id="stTotal">0 GB</b></div>
+            <div class="storage-stat"><span>ต้นฉบับ</span><b id="stUpload">0 GB</b></div>
+            <div class="storage-stat"><span>ชั่วคราว</span><b id="stTemp">0 GB</b></div>
+            <div class="storage-stat"><span>ผลลัพธ์</span><b id="stOutput">0 GB</b></div>
+          </div>
+          <div class="storage-overview">
+            <div class="storage-ring"><div><b id="ringGb">0.00</b><span>GB</span></div></div>
+            <div><b id="ringText">0.00 GB</b><div class="storage-breakdown" id="storageBreakdown"></div></div>
+          </div>
+          <div class="storage-delete-grid">
+            <button id="cleanupUploadsBtn" class="btn ghost" type="button">ลบต้นฉบับ</button>
+            <button id="cleanupBtn" class="btn ghost" type="button">ลบไฟล์ชั่วคราว</button>
+            <button id="cleanupOutputsBtn" class="btn ghost" type="button">ลบผลลัพธ์</button>
+            <button id="cleanupAllBtn" class="btn danger" type="button">ล้างทั้งหมด</button>
+          </div>
+        </section>
+      </main>
+    </div>
   </div>
 
-  <div class="app-shell">
-    <aside class="sidebar" id="sidebar">
-      <div class="brand">
-        <div class="brand-mark">炎</div>
-        <div><strong>ยุทธภพ</strong><span>ระบบพากย์เสียงหลายภาษา</span></div>
-      </div>
-      <nav class="nav">
-        <button class="nav-item active" data-page="home"><span>火</span>หน้าหลัก</button>
-        <button class="nav-item" data-page="jobs"><span>剑</span>งานพากย์</button>
-        <button class="nav-item" data-page="files"><span>卷</span>ไฟล์ต้นฉบับ</button>
-        <button class="nav-item" data-page="results"><span>印</span>ไฟล์ที่เสร็จแล้ว</button>
-        <button class="nav-item" data-page="voices"><span>声</span>เสียงพากย์</button>
-        <button class="nav-item" data-page="translate"><span>文</span>ภาษา</button>
-        <button class="nav-item" data-page="storage"><span>库</span>พื้นที่เก็บไฟล์</button>
-      </nav>
-      <div class="side-footer">
-        <div class="rank-card"><span>ระบบพร้อมใช้งาน</span><b>ทำงานต่อจากจุดเดิมได้</b><small>เก็บไฟล์ใน Google Drive</small></div>
-      </div>
-    </aside>
-
-    <main class="main">
-      <header class="topbar">
-        <button id="menuBtn" class="icon-btn mobile-only" aria-label="เมนู">☰</button>
-        <div class="top-spacer"></div>
-        <div class="storage-mini"><span>พื้นที่</span><b id="topStorage">0.00 GB / 15 GB</b><i><em id="topStorageBar"></em></i></div>
-        <span id="deployMode" class="deploy-mode">พร้อมใช้งาน</span>
-        <button class="icon-btn" id="refreshBtn" aria-label="รีเฟรช">↻</button>
-      </header>
-
-      <section class="page active" data-page-panel="home">
-        <div class="hero">
-          <div class="hero-copy">
-            <div class="eyebrow">炎声阁 ระบบพากย์เสียง</div>
-            <h1>ยุทธภพ <span>พากย์เสียง</span></h1>
-            <p>อัปโหลดวิดีโอหรือใช้ลิงก์ที่คุณมีสิทธิ์ ระบบจะแบ่งวิดีโอเป็นช่วงเพื่อให้ทำงานได้เร็วขึ้น และทำต่อจากช่วงเดิมได้เมื่อมีปัญหา</p>
-            <div class="hero-tags"><span>⚡ ประมวลผลเร็ว</span><span>🧩 แบ่งงานเป็นช่วง</span><span>☁ เก็บใน Google Drive</span></div>
-          </div>
-          <div class="hero-blade" aria-hidden="true"><i></i><b></b></div>
-        </div>
-
-        <div class="source-grid">
-          <button class="source-card ember" id="linkCard">
-            <span class="sigil">链</span><div><b>วางลิงก์วิดีโอ</b><small>YouTube หรือแหล่งที่คุณมีสิทธิ์ใช้งาน</small></div><span class="shine"></span>
-          </button>
-          <button class="source-card flame" id="uploadCard">
-            <span class="sigil">⇧</span><div><b>อัปโหลดไฟล์</b><small>เลือกไฟล์จากเครื่อง อัปโหลดต่อจากเดิมได้</small></div><span class="shine"></span>
-          </button>
-        </div>
-
-        <div class="panel create-panel">
-          <div class="source-box">
-            <div id="linkInputWrap" class="input-row">
-              <input id="videoUrl" type="url" inputmode="url" autocomplete="off" placeholder="วางลิงก์วิดีโอที่นี่" />
-              <button id="analyzeLinkBtn" class="btn ghost">ดึงซับ</button>
-            </div>
-
-            <div id="fileInputWrap" class="file-drop hidden">
-              <input id="fileInput" type="file" />
-              <label for="fileInput">
-                <span class="file-rune">⚔</span>
-                <b>เลือกไฟล์จากเครื่อง</b>
-                <span>มือถือเลือกจากไฟล์ในเครื่อง คอมเลือกจาก File Explorer</span>
-                <small>รองรับ MP4, MOV, MKV, WEBM, AVI และ M4V</small>
-              </label>
-              <div id="fileMeta" class="file-meta-card hidden"></div>
-              <div id="uploadProgress" class="upload-progress hidden">
-                <div><span id="uploadName">กำลังอัปโหลด</span><b id="uploadPct">0%</b></div>
-                <div class="sword-progress upload-sword"><i><em id="uploadBar"></em></i><span class="sword-hilt">◆</span></div>
-                <small id="uploadStatus">กำลังเตรียมไฟล์</small>
-              </div>
-            </div>
-
-            <div class="har-import" id="harImport">
-              <div class="har-copy">
-                <b>มี HAR จาก Bunny</b>
-                <small>เลือกไฟล์ HAR แล้วระบบจะหาซับที่ตรงกับภาษาพากย์ให้อัตโนมัติ ไฟล์ HAR จะถูกอ่านในเครื่องนี้</small>
-              </div>
-              <div class="har-actions">
-                <input id="harInput" class="har-file-input" type="file" accept=".har,application/json" />
-                <label for="harInput" class="btn ghost har-btn">เลือก HAR</label>
-                <span id="harStatus" class="har-status">ยังไม่ได้เลือก HAR</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="option-grid">
-            <label><span>ภาษาต้นฉบับ</span><select id="sourceLang"></select></label>
-            <div class="arrow-orb">➜</div>
-            <label><span>ภาษาพากย์</span><select id="targetLang"></select></label>
-            <label><span>เสียงพากย์</span><select id="voiceMode"><option value="auto">เลือกอัตโนมัติ</option><option value="male">เสียงผู้ชาย</option><option value="female">เสียงผู้หญิง</option><option value="narrator">เสียงผู้บรรยาย</option></select></label>
-            <label><span>ความเร็ว</span><select id="processingMode"><option value="fast" selected>เร็ว (แนะนำ)</option><option value="balanced">สมดุล</option><option value="quality">คุณภาพสูง (ใช้เวลามากขึ้น)</option></select></label>
-          </div>
-
-          <div class="speed-note" id="speedNote"><b>โหมดเร็ว</b><span>แบ่งวิดีโอช่วงละประมาณ 5 นาที และทำพร้อมกันได้สูงสุด 4 ช่วง</span></div>
-
-          <div class="toggles">
-            <label class="toggle"><input id="subtitles" type="checkbox" checked /><span></span><b>สร้างคำบรรยาย</b></label>
-            <label class="toggle"><input id="keepMusic" type="checkbox" checked /><span></span><b>เก็บเพลงและเสียงประกอบ</b></label>
-            <label class="toggle"><input id="speakerSep" type="checkbox" /><span></span><b>สลับเสียงตามผู้พูด (ทดลอง)</b></label>
-            <label class="toggle"><input id="autoCleanup" type="checkbox" checked /><span></span><b>ลบไฟล์ชั่วคราวเมื่อเสร็จ</b></label>
-          </div>
-
-          <button id="startBtn" class="btn primary big"><span class="btn-fire"></span><b>⚔ เริ่มพากย์เสียง</b><small>หากมีปัญหา สามารถลองใหม่จากช่วงที่ทำไว้แล้ว</small></button>
-          <div id="message" class="message" role="status"></div>
-        </div>
-
-        <div class="dashboard-grid">
-          <div class="panel jobs-panel"><div class="panel-title"><h2>งานที่กำลังทำ</h2><button id="seeJobs" class="text-btn">ดูทั้งหมด ›</button></div><div id="homeJobs" class="job-list empty-state">ยังไม่มีงานพากย์</div></div>
-          <div class="panel storage-panel"><div class="panel-title"><h2>พื้นที่ใช้งาน</h2></div><div class="storage-ring"><div><b id="ringGb">0.00</b><span>GB ใช้ไป</span></div></div><p><b id="ringText">0.00 GB</b> ใน Google Drive</p><div class="storage-breakdown" id="storageBreakdown"></div><button class="btn ghost full" data-go="storage">จัดการพื้นที่</button></div>
-        </div>
-      </section>
-
-      <section class="page" data-page-panel="jobs"><div class="page-head"><h1>งานพากย์ทั้งหมด</h1><p>ดูความคืบหน้า หยุดชั่วคราว ทำต่อ หรือลองใหม่ได้จากหน้านี้</p></div><div class="panel page-panel"><div id="jobsList" class="job-list empty-state">ยังไม่มีงาน</div></div></section>
-      <section class="page" data-page-panel="files"><div class="page-head"><h1>ไฟล์ต้นฉบับ</h1><p>ดูชื่อไฟล์ ขนาด และวันที่อัปโหลด</p></div><div class="panel page-panel"><div id="filesList" class="file-list empty-state">ยังไม่มีไฟล์</div></div></section>
-      <section class="page" data-page-panel="results"><div class="page-head"><h1>ไฟล์ที่เสร็จแล้ว</h1><p>กดดาวน์โหลดเพื่อบันทึกไฟล์ลงอุปกรณ์</p></div><div class="panel page-panel"><div id="resultsList" class="file-list empty-state">ยังไม่มีผลลัพธ์</div></div></section>
-      <section class="page" data-page-panel="voices"><div class="page-head"><h1>เสียงพากย์</h1><p>เลือกแนวเสียงที่ต้องการใช้</p></div><div class="voice-grid"><button class="voice-card active">เลือกอัตโนมัติ<small>เหมาะกับงานทั่วไป</small></button><button class="voice-card">เสียงผู้ชายสุขุม<small>โทนสงบ</small></button><button class="voice-card">เสียงผู้หญิงนุ่ม<small>โทนอุ่น</small></button><button class="voice-card">เสียงผู้บรรยาย<small>โทนเข้ม</small></button></div></section>
-      <section class="page" data-page-panel="translate"><div class="page-head"><h1>ภาษา</h1><p>ภาษาที่รองรับสำหรับการถอดเสียง แปล และพากย์</p></div><div id="languageCloud" class="language-cloud"></div></section>
-      <section class="page" data-page-panel="storage"><div class="page-head"><h1>พื้นที่เก็บไฟล์</h1><p>ตรวจสอบและจัดการพื้นที่ใน Google Drive</p></div><div class="storage-cards"><div class="panel stat"><span>ใช้ทั้งหมด</span><b id="stTotal">0 GB</b></div><div class="panel stat"><span>ต้นฉบับ</span><b id="stUpload">0 GB</b></div><div class="panel stat"><span>ชั่วคราว</span><b id="stTemp">0 GB</b></div><div class="panel stat"><span>ผลลัพธ์</span><b id="stOutput">0 GB</b></div></div><div class="panel storage-actions"><h2>ล้างพื้นที่</h2><p class="storage-action-note">เลือกเฉพาะส่วนที่ต้องการลบ ระบบจะแสดงขนาดก่อนลบ</p><div class="storage-delete-grid"><button id="cleanupUploadsBtn" class="btn ghost">ลบต้นฉบับ</button><button id="cleanupBtn" class="btn ghost">ลบไฟล์ชั่วคราว</button><button id="cleanupOutputsBtn" class="btn ghost">ลบผลลัพธ์</button><button id="cleanupAllBtn" class="btn danger">ล้างทั้งหมด</button></div><small class="storage-warning">ล้างทั้งหมดจะลบไฟล์และประวัติงานของระบบ การลบไม่สามารถย้อนกลับได้</small></div></section>
-    </main>
-  </div>
+  <div id="toastHost" class="toast-host" aria-live="polite" aria-atomic="true"></div>
 
   <div id="loadingOverlay" class="loading-overlay hidden" role="dialog" aria-modal="true">
-    <div class="loader-emblem"><span>炎</span><i></i></div>
-    <h3 id="loadingTitle">กำลังเตรียมงานพากย์</h3>
-    <p id="loadingText">กำลังเตรียมงาน</p>
-    <div class="sword-progress loader-sword"><i><em id="loadingBar"></em></i><span class="sword-hilt">◆</span></div>
-    <b id="loadingPercent">0%</b>
+    <div class="loader-card">
+      <span class="loader-label">PROCESSING</span>
+      <h3 id="loadingTitle">กำลังเตรียมงาน</h3>
+      <p id="loadingText">กำลังเตรียมงาน</p>
+      <div class="sword-progress loader-sword"><i><em id="loadingBar"></em></i><span class="sword-hilt"></span></div>
+      <b id="loadingPercent">0%</b>
+    </div>
   </div>
 
-  <script src="./app.js?v=20260831-har2" defer></script>
-  <script src="./performance.js?v=mobile-lite1" defer></script>
+  <!-- full-auto.js intentionally omitted from the streamlined studio -->
+  <script src="./app.js" defer></script>
+  <script src="./safety.js" defer></script>
+  <script src="./r3-studio.js" defer></script>
+  <script src="./studio-ui.js" defer></script>
+  <script src="./upload-fast.js" defer></script>
+  <script src="./mobile-upload-recovery.js" defer></script>
+  <script src="./pair-recovery.js" defer></script>
+  <script src="./studio-v2.js" defer></script>
 </body>
 </html>
