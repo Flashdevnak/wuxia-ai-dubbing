@@ -57,7 +57,7 @@
             </section>
 
             <section class="workflow-card media-card">
-              <div class="step-head"><span class="step-no">02</span><div><h2>วิดีโอและเสียงต้นฉบับ</h2><p>อัปโหลดจากเครื่องเป็นทางหลัก รองรับวิดีโอไม่มีเสียงและไฟล์เสียงแยก</p></div></div>
+              <div class="step-head"><span class="step-no">02</span><div><h2>วิดีโอและเสียงต้นฉบับ</h2><p>เลือกผ่าน Files / File Explorer เพื่อรองรับไฟล์ขนาดใหญ่และไฟล์วิดีโอที่ตัวเลือก Gallery มองไม่เห็น</p></div></div>
 
               <button class="source-card primary-source selected" id="uploadCard" type="button">
                 <div><b>อัปโหลดวิดีโอจากเครื่อง</b><small>MP4, MOV, MKV, WEBM, AVI หรือ M4V</small></div>
@@ -66,11 +66,11 @@
 
               <div class="source-box">
                 <div id="fileInputWrap" class="file-drop">
-                  <input id="fileInput" type="file" accept="video/*,.mp4,.mov,.mkv,.webm,.avi,.m4v" />
+                  <input id="fileInput" type="file" />
                   <label for="fileInput" class="file-picker">
-                    <b>เลือกไฟล์วิดีโอ</b>
-                    <span>แตะเพื่อเลือกไฟล์จากเครื่อง</span>
-                    <small>ไฟล์ขนาดใหญ่จะอัปโหลดแบบแบ่งส่วนและทำต่อจากจุดเดิมได้</small>
+                    <b>เปิด Files / File Explorer</b>
+                    <span>เลือกไฟล์วิดีโอจากโฟลเดอร์ในเครื่องโดยตรง</span>
+                    <small>ไม่จำกัดให้เปิดเฉพาะ Gallery หรือ Photo picker · รองรับไฟล์ขนาดใหญ่แบบแบ่งส่วนและทำต่อจากจุดเดิมได้</small>
                   </label>
                   <div id="fileMeta" class="file-meta-card hidden"></div>
                   <div id="uploadProgress" class="upload-progress hidden">
@@ -188,5 +188,24 @@
   <script src="./mobile-upload-recovery.js" defer></script>
   <script src="./pair-recovery.js" defer></script>
   <script src="./studio-v2.js" defer></script>
+  <script>
+    (() => {
+      const forceExplorerPicker = () => {
+        const video = document.getElementById('fileInput');
+        if (video) {
+          video.removeAttribute('accept');
+          video.removeAttribute('capture');
+        }
+        const audio = document.getElementById('pairAudioInput');
+        if (audio) {
+          audio.removeAttribute('accept');
+          audio.removeAttribute('capture');
+        }
+      };
+      forceExplorerPicker();
+      document.addEventListener('DOMContentLoaded', forceExplorerPicker, { once: true });
+      new MutationObserver(forceExplorerPicker).observe(document.documentElement, { childList: true, subtree: true });
+    })();
+  </script>
 </body>
 </html>
