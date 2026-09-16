@@ -15,6 +15,14 @@
         <strong>ยุทธภพ สตูดิโอ</strong>
         <span>Video Dubbing Workspace</span>
       </div>
+
+      <nav class="studio-nav" id="sidebar" aria-label="เมนูหลัก">
+        <button class="nav-item active" data-page="home" type="button"><span>NEW</span><b>สร้างงาน</b></button>
+        <button class="nav-item" data-page="jobs" type="button"><span>JOBS</span><b>งานพากย์</b></button>
+        <button class="nav-item" data-page="files" type="button"><span>FILES</span><b>ไฟล์</b></button>
+        <button class="nav-item" data-page="storage" type="button"><span>SPACE</span><b>พื้นที่</b></button>
+      </nav>
+
       <div class="studio-head-tools">
         <div class="head-storage" aria-label="พื้นที่ใช้งาน">
           <span>Workspace</span>
@@ -27,23 +35,17 @@
     </header>
 
     <div class="studio-layout">
-      <aside class="studio-nav" id="sidebar" aria-label="เมนูหลัก">
-        <button class="nav-item active" data-page="home" type="button"><span>NEW</span><b>สร้างงาน</b></button>
-        <button class="nav-item" data-page="jobs" type="button"><span>JOBS</span><b>งานพากย์</b></button>
-        <button class="nav-item" data-page="files" type="button"><span>FILES</span><b>ไฟล์</b></button>
-        <button class="nav-item" data-page="storage" type="button"><span>SPACE</span><b>พื้นที่</b></button>
-      </aside>
-
       <main class="studio-main">
         <section class="page active" data-page-panel="home">
           <div class="workspace-heading">
             <div>
               <span class="page-kicker">NEW DUB</span>
               <h1>สร้างงานพากย์ไทย</h1>
-              <p>เตรียมวิดีโอ ตั้งค่าเสียง และเริ่มงานจากพื้นที่เดียว</p>
+              <p>เตรียมไฟล์ ตั้งค่าเสียง และเริ่มงานจาก workspace เดียว</p>
             </div>
             <div class="workspace-health">
-              <span><i></i> Upload resumable</span>
+              <span><i></i> Multipart resumable</span>
+              <span>Mobile recovery</span>
               <span>R3 Smart Dubbing</span>
             </div>
           </div>
@@ -52,16 +54,16 @@
             <div class="workspace-column source-column">
               <section class="studio-section project-card">
                 <div class="section-head">
-                  <div><span class="section-eyebrow">PROJECT</span><h2>ชื่องาน</h2></div>
-                  <small>เริ่มงานใหม่แล้วช่องชื่อจะกลับเป็นค่าเริ่มต้น</small>
+                  <div><span class="section-eyebrow">PROJECT</span><h2>โปรเจกต์</h2></div>
+                  <small>ชื่อเรื่อง Season และ Episode ของงานนี้</small>
                 </div>
                 <div id="projectSlot" class="project-slot"><div class="slot-loading">กำลังเตรียมข้อมูลโปรเจกต์</div></div>
               </section>
 
               <section class="studio-section media-card">
                 <div class="section-head">
-                  <div><span class="section-eyebrow">SOURCE</span><h2>วิดีโอและเสียง</h2></div>
-                  <small>รองรับไฟล์ใหญ่และทำต่อจากจุดเดิม</small>
+                  <div><span class="section-eyebrow">SOURCE MEDIA</span><h2>วิดีโอและเสียงต้นฉบับ</h2></div>
+                  <small>รองรับไฟล์ใหญ่ 1–2 GB+ และทำต่อจากจุดเดิม</small>
                 </div>
 
                 <div class="source-switch" role="group" aria-label="แหล่งวิดีโอ">
@@ -79,7 +81,7 @@
                     <label for="fileInput" class="file-picker">
                       <span class="picker-action">เลือกวิดีโอ</span>
                       <b>เปิด Files / File Explorer</b>
-                      <small>MP4, MOV, MKV, WEBM, AVI, M4V · multipart resumable · รองรับ 1–2 GB+</small>
+                      <small>MP4, MOV, MKV, WEBM, AVI, M4V · multipart resumable upload</small>
                     </label>
 
                     <div id="fileMeta" class="file-meta-card hidden"></div>
@@ -130,8 +132,8 @@
             <div class="workspace-column config-column">
               <section class="studio-section settings-card">
                 <div class="section-head">
-                  <div><span class="section-eyebrow">DUB SETTINGS</span><h2>ตั้งค่าพากย์</h2></div>
-                  <small>ค่าหลักอยู่ในหน้าจอเดียว</small>
+                  <div><span class="section-eyebrow">DUB SETTINGS</span><h2>การตั้งค่าพากย์</h2></div>
+                  <small>ค่าหลักสำหรับงานนี้อยู่ในจอเดียว</small>
                 </div>
 
                 <div class="option-grid">
@@ -157,19 +159,19 @@
 
               <section class="studio-section launch-card">
                 <div class="launch-summary">
-                  <div><span>PIPELINE</span><b>Upload → Prepare → Transcribe → Translate → Dub → Mix → QC</b></div>
-                  <span class="server-check">ตรวจไฟล์บนเซิร์ฟเวอร์ก่อนเริ่มทุกครั้ง</span>
+                  <div><span>PIPELINE</span><b>Upload → Prepare → Transcribe → Translate → Dub → Mix → Quality Check</b></div>
+                  <span class="server-check">ตรวจไฟล์บนเซิร์ฟเวอร์ก่อนเริ่ม</span>
                 </div>
-                <button id="startBtn" class="btn primary start-button" type="button"><b>เริ่มงานพากย์</b><small>ติดตามได้ใน Active Jobs ด้านล่าง</small></button>
+                <button id="startBtn" class="btn primary start-button" type="button"><b>เริ่มงานพากย์</b><small>สร้าง Job และติดตามสถานะด้านล่าง</small></button>
                 <div id="message" class="message sr-only" role="status" aria-live="polite"></div>
+              </section>
+
+              <section class="home-jobs-section docked-jobs">
+                <div class="section-title"><div><span class="page-kicker">ACTIVE / RECENT</span><h2>งานล่าสุด</h2></div><button id="seeJobs" class="text-btn" type="button">ดูทั้งหมด</button></div>
+                <div id="homeJobs" class="job-list compact-jobs empty-state">ยังไม่มีงานพากย์</div>
               </section>
             </div>
           </div>
-
-          <section class="home-jobs-section">
-            <div class="section-title"><div><span class="page-kicker">ACTIVE / RECENT</span><h2>งานล่าสุด</h2></div><button id="seeJobs" class="text-btn" type="button">ดูทั้งหมด</button></div>
-            <div id="homeJobs" class="job-list compact-jobs empty-state">ยังไม่มีงานพากย์</div>
-          </section>
         </section>
 
         <section class="page" data-page-panel="jobs">
