@@ -5,10 +5,18 @@ def main() -> None:
     root = Path(__file__).resolve().parents[1]
     wrangler = (root / 'wrangler.jsonc').read_text(encoding='utf-8')
     worker = (root / 'src' / 'worker-r3.js').read_text(encoding='utf-8')
+    fast_worker_path = root / 'src' / 'worker-fast.js'
+    fast_worker = fast_worker_path.read_text(encoding='utf-8') if fast_worker_path.exists() else ''
     ui = (root / 'public' / 'r3-studio.js').read_text(encoding='utf-8')
     guard = (root / 'scripts' / 'dub_guard.py').read_text(encoding='utf-8')
 
-    assert '"main": "src/worker-r3.js"' in wrangler
+    direct_r3 = '"main": "src/worker-r3.js"' in wrangler
+    wrapped_r3 = '"main": "src/worker-fast.js"' in wrangler and "import r3Worker from './worker-r3.js'" in fast_worker
+    assert direct_r3 or wrapped_r3
+    if wrapped_r3:
+        for marker in ('uploadAcceleration', 'uploadConcurrencyMax', 'upload-fast.js'):
+            assert marker in fast_worker, marker
+
     for marker in (
         'r3SmartStudio', '/api/r3/batch', '/repair', 'r3-studio.js',
         'glossaryMemory', 'timingRescue', 'qualityGate', 'finalQualityGate',
