@@ -305,29 +305,21 @@ async function deleteJobWithExtras(request, env, url) {
   }
 }
 
-async function cleanupCaptionAfterCompletedDub(request, env, url) {
-  if (url.pathname !== '/api/internal/complete' || request.method !== 'POST') return null;
-  let body = {};
+async function enrichHealthResponse(response) {
+  if (!response?.ok) return response;
   try {
-    body = await request.clone().json();
-  } catch {}
-  const response = await baseWorker.fetch(request, env);
-  if (!response.ok || !body?.jobId) return response;
-
-  try {
-    const job = await readJob(env, String(body.jobId));
-    if (
-      job?.jobType === 'dubbing'
-      && job?.status === 'completed'
-      && job?.autoCleanup === true
-      && String(job?.captionKey || '').startsWith('temp/caption-imports/')
-    ) {
-      await deleteLogical(env, String(job.captionKey));
-    }
-  } catch (err) {
-    console.warn('caption cleanup after completed dub failed', err?.message || err);
+    const data = await response.clone().json();
+    data.safety = 'guard-v1';
+    data.signedUploads = true;
+    data.downloadTickets = true;
+    data.activeDeleteProtection = true;
+    const headers = new Headers(response.headers);
+    headers.set('content-type', 'application/json; charset=utf-8');
+    headers.set('cache-control', 'no-store, no-cache, must-revalidate');
+    return new Response(JSON.stringify(data), { status: response.status, headers });
+  } catch {
+    return response;
   }
-  return response;
 }
 
 async function injectSafetyAsset(response) {
@@ -381,9 +373,6 @@ export default {
     const deleteBlock = await protectActiveJobDelete(request, env, url);
     if (deleteBlock) return deleteBlock;
 
-    const completedDub = await cleanupCaptionAfterCompletedDub(request, env, url);
-    if (completedDub) return completedDub;
-
     const safeDelete = await deleteJobWithExtras(request, env, url);
     if (safeDelete) return safeDelete;
 
@@ -415,6 +404,9 @@ export default {
     }
 
     const response = await baseWorker.fetch(request, env);
+    if (request.method === 'GET' && path === '/api/health') {
+      return enrichHealthResponse(response);
+    }
     if (request.method === 'GET' && (path === '/' || path === '/index.html')) {
       return injectSafetyAsset(response);
     }
