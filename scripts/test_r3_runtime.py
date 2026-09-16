@@ -11,13 +11,19 @@ def main() -> None:
     assert '"main": "src/worker-r3.js"' in wrangler
     for marker in (
         'r3SmartStudio', '/api/r3/batch', '/repair', 'r3-studio.js',
-        'glossaryMemory', 'timingRescue', 'qualityGate', 'segmentRepair',
-        'batchQueue', 'quotaCacheGuard',
+        'glossaryMemory', 'timingRescue', 'qualityGate', 'finalQualityGate',
+        'segmentRepair', 'batchQueue', 'quotaCacheGuard', '/api/internal/complete',
     ):
         assert marker in worker, marker
-    for marker in ('Smart Dubbing Studio R3', 'r3Glossary', 'r3BatchBtn', 'r3-repair-btn', 'r3ContextTranslation'):
+    for marker in (
+        'Smart Dubbing Studio R3', 'r3Glossary', 'r3BatchBtn', 'r3-repair-btn',
+        'r3ContextTranslation', 'wuxia-r3-project-last-v1', 'advanceEpisode',
+    ):
         assert marker in ui, marker
-    for marker in ('AUDIO_PROFILE_VERSION = 6', 'translation cache HIT', 'compact_thai', 'R3 Quality Gate', 'quota_estimate'):
+    for marker in (
+        'AUDIO_PROFILE_VERSION = 6', 'translation cache HIT', 'compact_thai',
+        'R3 Quality Gate', 'quota_estimate',
+    ):
         assert marker in guard, marker
 
     print('R3 runtime integration acceptance: PASS')
