@@ -7,15 +7,25 @@ def main() -> None:
     worker = (root / 'src' / 'worker-r3.js').read_text(encoding='utf-8')
     fast_worker_path = root / 'src' / 'worker-fast.js'
     fast_worker = fast_worker_path.read_text(encoding='utf-8') if fast_worker_path.exists() else ''
+    pair_worker_path = root / 'src' / 'worker-pairfix.js'
+    pair_worker = pair_worker_path.read_text(encoding='utf-8') if pair_worker_path.exists() else ''
     ui = (root / 'public' / 'r3-studio.js').read_text(encoding='utf-8')
     guard = (root / 'scripts' / 'dub_guard.py').read_text(encoding='utf-8')
 
     direct_r3 = '"main": "src/worker-r3.js"' in wrangler
     wrapped_r3 = '"main": "src/worker-fast.js"' in wrangler and "import r3Worker from './worker-r3.js'" in fast_worker
-    assert direct_r3 or wrapped_r3
-    if wrapped_r3:
+    pair_wrapped_r3 = (
+        '"main": "src/worker-pairfix.js"' in wrangler
+        and "import fastWorker from './worker-fast.js'" in pair_worker
+        and "import r3Worker from './worker-r3.js'" in fast_worker
+    )
+    assert direct_r3 or wrapped_r3 or pair_wrapped_r3
+    if wrapped_r3 or pair_wrapped_r3:
         for marker in ('uploadAcceleration', 'uploadConcurrencyMax', 'upload-fast.js'):
             assert marker in fast_worker, marker
+    if pair_wrapped_r3:
+        for marker in ('separateAudioPairRecovery', 'pair-recovery.js', 'attach-audio'):
+            assert marker in pair_worker, marker
 
     for marker in (
         'r3SmartStudio', '/api/r3/batch', '/repair', 'r3-studio.js',

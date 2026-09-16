@@ -2,7 +2,7 @@ name: Validate web project
 
 on:
   push:
-    branches: [main, codex/full-auto-dubbing-v1, codex/r3-runtime-integration, codex/separate-audio-human-ui, codex/parallel-upload-acceleration, codex/mobile-background-upload-v2]
+    branches: [main, codex/full-auto-dubbing-v1, codex/r3-runtime-integration, codex/separate-audio-human-ui, codex/parallel-upload-acceleration, codex/mobile-background-upload-v2, codex/separate-audio-pair-fix]
   pull_request:
 
 jobs:
@@ -25,15 +25,19 @@ jobs:
           node --check public/studio-ui.js
           node --check public/upload-fast.js
           node --check public/mobile-upload-recovery.js
+          node --check public/pair-recovery.js
           node --check src/worker.js
           node --check src/worker-safe.js
           node --check src/worker-full.js
           node --check src/worker-r3.js
           node --check src/worker-fast.js
+          node --check src/worker-pairfix.js
           node --check src/storage.js
           node --check src/youtube.js
       - name: Mobile Background Upload V2 contract
         run: node scripts/test_mobile_background_upload.mjs
+      - name: Separate Audio Pair Recovery contract
+        run: node scripts/test_pair_recovery.mjs
       - name: Python syntax check
         run: |
           python -m py_compile \
@@ -77,11 +81,13 @@ jobs:
           test -f public/studio-ui.css
           test -f public/upload-fast.js
           test -f public/mobile-upload-recovery.js
+          test -f public/pair-recovery.js
           test -f src/worker.js
           test -f src/worker-safe.js
           test -f src/worker-full.js
           test -f src/worker-r3.js
           test -f src/worker-fast.js
+          test -f src/worker-pairfix.js
           test -f src/storage.js
           test -f src/youtube.js
           test -f wrangler.jsonc
@@ -89,6 +95,7 @@ jobs:
           test -f scripts/media_pair.py
           test -f scripts/test_media_pair.py
           test -f scripts/test_mobile_background_upload.mjs
+          test -f scripts/test_pair_recovery.mjs
           test -f scripts/dub_guard.py
           test -f scripts/r3_studio.py
           test -f scripts/voice_profiles.py
@@ -110,7 +117,7 @@ jobs:
           grep -q "1:a:0" scripts/media_pair.py
           grep -q "MEDIA_PAIR_ACCEPTANCE_PASS" scripts/test_media_pair.py
           grep -q "ระบบไม่ส่งออกไฟล์ไทยที่ผิดภาษา" scripts/extract_transcript_job.py
-          grep -q '"main": "src/worker-fast.js"' wrangler.jsonc
+          grep -q '"main": "src/worker-pairfix.js"' wrangler.jsonc
           grep -q '"binding": "MEDIA_BUCKET"' wrangler.jsonc
           grep -q '"*/10 \* \* \* \*"' wrangler.jsonc
           grep -q "r3SmartStudio" src/worker-r3.js
@@ -134,6 +141,9 @@ jobs:
           grep -q "mobileBackgroundUploadMode = 'best-effort-v2'" src/worker-fast.js
           grep -q "background-best-effort-v2" public/mobile-upload-recovery.js
           grep -q "originalSend.call(xhr, body)" public/mobile-upload-recovery.js
+          grep -q "separateAudioPairRecovery" src/worker-pairfix.js
+          grep -q "pair-recovery.js" src/worker-pairfix.js
+          grep -q "sourceAudioKey" public/pair-recovery.js
           if grep -q "waitUntilVisible" public/mobile-upload-recovery.js; then
             echo "Background uploader still contains foreground-only wait gate" >&2
             exit 1
