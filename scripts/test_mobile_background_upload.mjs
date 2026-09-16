@@ -48,9 +48,10 @@ globalThis.document = {
 globalThis.window = {
   addEventListener(name, fn) { listeners.set(`window:${name}`, fn); },
 };
-globalThis.navigator = {
-  storage: { persist: async () => true },
-};
+Object.defineProperty(globalThis, 'navigator', {
+  configurable: true,
+  value: { storage: { persist: async () => true } },
+});
 
 await import('../public/mobile-upload-recovery.js');
 
