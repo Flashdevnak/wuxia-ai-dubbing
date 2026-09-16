@@ -1,0 +1,40 @@
+name: R2 Provision Probe
+
+on:
+  push:
+    branches: [codex/r2-storage-failover-v1]
+    paths:
+      - '.github/workflows/r2-provision-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      BUCKET: wuxia-ai-dubbing-files
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - run: npm install
+      - name: Ensure R2 bucket exists
+        run: |
+          set -euo pipefail
+          LIST="$(npx wrangler r2 bucket list 2>&1)"
+          printf '%s\n' "$LIST"
+          if printf '%s\n' "$LIST" | grep -Fq "$BUCKET"; then
+            echo "R2 bucket already exists: $BUCKET"
+          else
+            npx wrangler r2 bucket create "$BUCKET"
+          fi
+      - name: Verify R2 bucket
+        run: |
+          npx wrangler r2 bucket list | tee /tmp/r2-list.txt
+          grep -Fq "$BUCKET" /tmp/r2-list.txt
