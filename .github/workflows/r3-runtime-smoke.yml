@@ -1,0 +1,70 @@
+name: R3 Runtime Smoke
+
+on:
+  workflow_run:
+    workflows: ["Deploy Cloudflare Backend"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    env:
+      WORKER_URL: https://wuxia-ai-dubbing.26nak-testdev.workers.dev
+    steps:
+      - name: Verify R3 health, UI injection and protected routes
+        run: |
+          python - <<'PY'
+          import json, os, urllib.error, urllib.request
+          base = os.environ['WORKER_URL'].rstrip('/')
+          ua = 'Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 Chrome/140.0 Mobile Safari/537.36'
+
+          def call(path, method='GET', body=None, expect_json=True):
+              data = None if body is None else json.dumps(body).encode()
+              headers = {'User-Agent': ua, 'Accept': 'application/json,*/*'}
+              if data is not None:
+                  headers['content-type'] = 'application/json'
+              req = urllib.request.Request(base + path, data=data, headers=headers, method=method)
+              try:
+                  with urllib.request.urlopen(req, timeout=60) as r:
+                      raw = r.read()
+                      if expect_json:
+                          return r.status, json.loads(raw.decode('utf-8')) if raw else {}
+                      return r.status, raw.decode('utf-8', 'replace')
+              except urllib.error.HTTPError as e:
+                  raw = e.read().decode('utf-8', 'replace')
+                  try: parsed = json.loads(raw) if raw else {}
+                  except Exception: parsed = {'raw': raw}
+                  return e.code, parsed if expect_json else raw
+
+          status, health = call('/api/health')
+          assert status == 200 and health.get('ok') is True, health
+          assert health.get('r3SmartStudio') is True, health
+          assert int(health.get('r3Version') or 0) == 3, health
+          for key in ('contextTranslation','glossaryMemory','deterministicCasting','timingRescue','qualityGate','segmentRepair','batchQueue','quotaCacheGuard'):
+              assert health.get(key) is True, (key, health)
+          print('R3 health contract: OK')
+
+          status, html = call('/?smoke=r3', expect_json=False)
+          assert status == 200, status
+          assert 'r3-studio.js?v=r3-1' in html, 'missing R3 JS runtime injection'
+          assert 'r3-studio.css?v=r3-1' in html, 'missing R3 CSS runtime injection'
+          print('R3 UI injection: OK')
+
+          status, denied = call('/api/r3/batch', 'POST', {'items':[{'sourceUrl':'https://youtu.be/example'}]})
+          assert status == 401, (status, denied)
+          status, denied = call('/api/r3/jobs/not-a-real-job/repair', 'POST', {'chunks':[0], 'action':'retranslate'})
+          assert status == 401, (status, denied)
+          print('R3 protected routes: OK')
+          PY
+      - name: Summary
+        run: |
+          echo '### R3 runtime smoke passed' >> "$GITHUB_STEP_SUMMARY"
+          echo '- R3 health flags live' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Smart Studio JS/CSS injected in Worker HTML' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Batch and repair routes protected' >> "$GITHUB_STEP_SUMMARY"
