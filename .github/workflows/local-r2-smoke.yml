@@ -188,7 +188,7 @@ jobs:
 
           after = requests.get(base + '/api/storage', headers=public, timeout=30)
           after.raise_for_status()
-          assert int(after.json().get('bytes') or -1) == 0, after.text
+          assert int(after.json().get('bytes', -1)) == 0, after.text
           jobs = requests.get(base + '/api/jobs', headers=public, timeout=30)
           jobs.raise_for_status()
           assert jobs.json().get('jobs') == [], jobs.text
