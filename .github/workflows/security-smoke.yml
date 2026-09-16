@@ -5,77 +5,145 @@ on:
     workflows: ["Deploy Cloudflare Backend"]
     types: [completed]
   workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/security-smoke.yml'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/security-smoke.yml'
 
 permissions:
   contents: read
 
 jobs:
   safety-smoke:
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main') }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request' || github.event_name == 'push' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
       WORKER_URL: https://wuxia-ai-dubbing.26nak-testdev.workers.dev
       ACCESS_KEY: ${{ secrets.WUXIA_ACCESS_KEY }}
     steps:
-      - name: Verify safety wrapper and secure upload session
+      - name: Verify safety wrapper and secure R2 upload session
         run: |
           python - <<'PY'
-          import json, os, urllib.error, urllib.request
+          import io, json, os, urllib.error, urllib.parse, urllib.request, uuid
 
           base = os.environ['WORKER_URL'].rstrip('/')
           access = os.environ['ACCESS_KEY']
           ua = 'Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 Chrome/140.0 Mobile Safari/537.36'
 
-          def call(path, method='GET', payload=None, auth=False, expect_json=True):
-              body = None if payload is None else json.dumps(payload).encode()
+          def call(path, method='GET', payload=None, auth=False, expect_json=True, raw_body=None, extra_headers=None):
+              body = raw_body if raw_body is not None else (None if payload is None else json.dumps(payload).encode())
               headers = {'User-Agent': ua, 'Accept': 'application/json,*/*'}
               if auth:
                   headers['x-access-key'] = access
-              if body is not None:
+              if payload is not None and raw_body is None:
                   headers['content-type'] = 'application/json'
+              headers.update(extra_headers or {})
               req = urllib.request.Request(base + path, data=body, headers=headers, method=method)
               try:
                   with urllib.request.urlopen(req, timeout=90) as r:
                       raw = r.read()
                       if not expect_json:
-                          return r.status, raw.decode('utf-8', 'replace')
+                          return r.status, raw
                       return r.status, json.loads(raw.decode('utf-8')) if raw else {}
               except urllib.error.HTTPError as e:
                   raw = e.read().decode('utf-8', 'replace')
                   raise RuntimeError(f'{method} {path} -> {e.code}: {raw[:1200]}')
 
+          def multipart_chunk(key, upload_id, part_number, chunk):
+              boundary = '----wuxia-safety-' + uuid.uuid4().hex
+              buf = io.BytesIO()
+
+              def field(name, value):
+                  buf.write(f'--{boundary}\r\n'.encode())
+                  buf.write(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode())
+                  buf.write(str(value).encode())
+                  buf.write(b'\r\n')
+
+              field('key', key)
+              field('uploadId', upload_id)
+              field('partNumber', part_number)
+              buf.write(f'--{boundary}\r\n'.encode())
+              buf.write(b'Content-Disposition: form-data; name="chunk"; filename="chunk.bin"\r\n')
+              buf.write(b'Content-Type: application/octet-stream\r\n\r\n')
+              buf.write(chunk)
+              buf.write(b'\r\n')
+              buf.write(f'--{boundary}--\r\n'.encode())
+              body = buf.getvalue()
+              return call(
+                  '/api/uploads/chunk',
+                  'POST',
+                  auth=True,
+                  raw_body=body,
+                  extra_headers={
+                      'content-type': f'multipart/form-data; boundary={boundary}',
+                      'content-length': str(len(body)),
+                  },
+              )[1]
+
           _, health = call('/api/health')
           assert health.get('ok') is True, health
           assert health.get('driveReady') is True, health
+          assert health.get('storageReady') is True, health
+          assert health.get('backend') == 'cloudflare-r2-temp', health
+          assert health.get('temporaryStorage') is True, health
+          assert health.get('fullAutoUi') is True, health
           assert health.get('safety') == 'guard-v1', health
           assert health.get('signedUploads') is True, health
           assert health.get('downloadTickets') is True, health
           assert health.get('activeDeleteProtection') is True, health
-          print('health safety guard: OK')
+          print('health safety + R2 guard: OK')
 
-          _, html = call('/?smoke=safety', expect_json=False)
+          _, html_bytes = call('/?smoke=safety', expect_json=False)
+          html = html_bytes.decode('utf-8', 'replace')
           assert 'safety.js?v=guard1' in html, 'safety.js was not injected into Worker HTML'
-          print('runtime UI safety guard: OK')
+          assert 'full-auto.js?v=full-auto1' in html, 'full-auto.js was not injected into Worker HTML'
+          assert 'full-auto.css?v=full-auto1' in html, 'full-auto.css was not injected into Worker HTML'
+          print('runtime safety + full-auto UI assets: OK')
 
+          payload = b'safety-r2-smoke!'
           _, started = call('/api/uploads/start', 'POST', {
               'name': '__safety_smoke__.bin',
-              'size': 16,
+              'size': len(payload),
               'type': 'application/octet-stream',
           }, auth=True)
           key = started.get('key')
           upload_id = started.get('uploadId')
           assert key and isinstance(upload_id, str) and upload_id.startswith('u1.'), started
-          assert 'www.googleapis.com' not in upload_id, 'raw Google resumable session leaked to client'
+          assert 'www.googleapis.com' not in upload_id, 'raw resumable session leaked to client'
           print('signed resumable upload id: OK')
+
+          part = multipart_chunk(key, upload_id, 1, payload)
+          assert int(part.get('partNumber', 0)) == 1, part
+          _, completed = call('/api/uploads/complete', 'POST', {'key': key, 'uploadId': upload_id}, auth=True)
+          assert int(completed.get('size', -1)) == len(payload), completed
+          print('R2 multipart completion: OK')
 
           _, ticket = call('/api/files/download-ticket', 'POST', {'key': key}, auth=True)
           value = ticket.get('ticket')
           assert isinstance(value, str) and value.startswith('d1.'), ticket
-          assert int(ticket.get('expiresIn') or 0) <= 120, ticket
-          print('short-lived download ticket: OK')
+          assert 0 < int(ticket.get('expiresIn') or 0) <= 120, ticket
+          q = urllib.parse.urlencode({'key': key, 'ticket': value})
+          _, downloaded = call('/api/files/download?' + q, expect_json=False)
+          assert downloaded == payload, (len(downloaded), len(payload))
+          print('short-lived secure download ticket: OK')
 
-          _, aborted = call('/api/uploads/abort', 'POST', {'key': key, 'uploadId': upload_id}, auth=True)
+          _, deleted = call('/api/files?' + urllib.parse.urlencode({'key': key}), 'DELETE', auth=True)
+          assert deleted.get('ok') is True, deleted
+          print('completed smoke object cleanup: OK')
+
+          _, abort_started = call('/api/uploads/start', 'POST', {
+              'name': '__safety_abort_smoke__.bin',
+              'size': 16,
+              'type': 'application/octet-stream',
+          }, auth=True)
+          _, aborted = call('/api/uploads/abort', 'POST', {
+              'key': abort_started['key'],
+              'uploadId': abort_started['uploadId'],
+          }, auth=True)
           assert aborted.get('ok') is True, aborted
           print('signed upload abort/cleanup: OK')
           PY
@@ -83,7 +151,9 @@ jobs:
       - name: Safety summary
         run: |
           echo '### Worker safety smoke passed' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Safety guard exposed by /api/health' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Runtime safety.js injection present' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Safety + temporary R2 guards exposed by /api/health' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Runtime safety.js and full-auto UI injection present' >> "$GITHUB_STEP_SUMMARY"
           echo '- Signed resumable upload IDs verified' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Short-lived download tickets verified' >> "$GITHUB_STEP_SUMMARY"
+          echo '- R2 multipart completion verified' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Short-lived secure download tickets verified' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Abort and cleanup verified' >> "$GITHUB_STEP_SUMMARY"
