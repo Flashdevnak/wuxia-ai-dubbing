@@ -3,6 +3,7 @@ import fs from 'node:fs';
 
 const ui = fs.readFileSync('public/pair-recovery.js', 'utf8');
 const worker = fs.readFileSync('src/worker-pairfix.js', 'utf8');
+const stability = fs.existsSync('src/worker-stability.js') ? fs.readFileSync('src/worker-stability.js', 'utf8') : '';
 const wrangler = fs.readFileSync('wrangler.jsonc', 'utf8');
 
 assert.match(ui, /recoverPair/);
@@ -15,6 +16,10 @@ assert.match(worker, /attach-audio/);
 assert.match(worker, /sourceAudioKey/);
 assert.match(worker, /pairRecoveredAt/);
 assert.match(worker, /failedJobAudioAttach/);
-assert.match(wrangler, /src\/worker-pairfix\.js/);
+
+const directPair = /src\/worker-pairfix\.js/.test(wrangler);
+const stabilityPair = /src\/worker-stability\.js/.test(wrangler)
+  && /import pairWorker from '\.\/worker-pairfix\.js'/.test(stability);
+assert.ok(directPair || stabilityPair, 'pair recovery worker must be reachable from Wrangler entrypoint');
 
 console.log('SEPARATE_AUDIO_PAIR_RECOVERY_PASS');
