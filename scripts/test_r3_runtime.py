@@ -9,6 +9,8 @@ def main() -> None:
     fast_worker = fast_worker_path.read_text(encoding='utf-8') if fast_worker_path.exists() else ''
     pair_worker_path = root / 'src' / 'worker-pairfix.js'
     pair_worker = pair_worker_path.read_text(encoding='utf-8') if pair_worker_path.exists() else ''
+    stability_worker_path = root / 'src' / 'worker-stability.js'
+    stability_worker = stability_worker_path.read_text(encoding='utf-8') if stability_worker_path.exists() else ''
     ui = (root / 'public' / 'r3-studio.js').read_text(encoding='utf-8')
     guard = (root / 'scripts' / 'dub_guard.py').read_text(encoding='utf-8')
 
@@ -19,13 +21,23 @@ def main() -> None:
         and "import fastWorker from './worker-fast.js'" in pair_worker
         and "import r3Worker from './worker-r3.js'" in fast_worker
     )
-    assert direct_r3 or wrapped_r3 or pair_wrapped_r3
-    if wrapped_r3 or pair_wrapped_r3:
-        for marker in ('uploadAcceleration', 'uploadConcurrencyMax', 'upload-fast.js'):
+    stability_wrapped_r3 = (
+        '"main": "src/worker-stability.js"' in wrangler
+        and "import pairWorker from './worker-pairfix.js'" in stability_worker
+        and "import fastWorker from './worker-fast.js'" in pair_worker
+        and "import r3Worker from './worker-r3.js'" in fast_worker
+    )
+    assert direct_r3 or wrapped_r3 or pair_wrapped_r3 or stability_wrapped_r3
+
+    if wrapped_r3 or pair_wrapped_r3 or stability_wrapped_r3:
+        for marker in ('uploadAcceleration', 'uploadConcurrencyMax'):
             assert marker in fast_worker, marker
-    if pair_wrapped_r3:
+    if pair_wrapped_r3 or stability_wrapped_r3:
         for marker in ('separateAudioPairRecovery', 'pair-recovery.js', 'attach-audio'):
             assert marker in pair_worker, marker
+    if stability_wrapped_r3:
+        for marker in ('resilient-multipart-v4', 'upload-engine-v4.js', 'uploadServerReconcile', 'versionQueryRequired'):
+            assert marker in stability_worker, marker
 
     for marker in (
         'r3SmartStudio', '/api/r3/batch', '/repair', 'r3-studio.js',
