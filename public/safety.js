@@ -2,17 +2,35 @@
   const qs = s => document.querySelector(s);
   const apiBase = window.WUXIA_API_BASE || '';
 
+  function loadFullAutoEnhancements() {
+    if (!document.querySelector('link[data-full-auto]')) {
+      const css = document.createElement('link');
+      css.rel = 'stylesheet';
+      css.href = './full-auto.css?v=full1';
+      css.dataset.fullAuto = '1';
+      document.head.appendChild(css);
+    }
+    if (!document.querySelector('script[data-full-auto]')) {
+      const script = document.createElement('script');
+      script.src = './full-auto.js?v=full1';
+      script.defer = true;
+      script.dataset.fullAuto = '1';
+      document.head.appendChild(script);
+    }
+  }
+
   async function health() {
     const badge = qs('#deployMode');
     const start = qs('#startBtn');
     try {
       const response = await fetch(apiBase + '/api/health', { cache: 'no-store' });
       const data = await response.json().catch(() => ({}));
-      const ready = response.ok && data.ok === true && data.driveReady === true;
-      if (badge) badge.textContent = ready ? 'ระบบพร้อมใช้งาน' : 'ระบบเก็บไฟล์มีปัญหา';
+      const storageReady = data.storageReady === true || data.driveReady === true;
+      const ready = response.ok && data.ok === true && storageReady;
+      if (badge) badge.textContent = ready ? 'ระบบพร้อมพากย์' : 'พื้นที่ชั่วคราวมีปัญหา';
       if (start) start.disabled = !ready;
       if (!ready && qs('#message')) {
-        qs('#message').textContent = data.detail || 'Google Drive ยังไม่พร้อม ระบบปิดปุ่มเริ่มงานชั่วคราว';
+        qs('#message').textContent = data.detail || 'พื้นที่ชั่วคราวยังไม่พร้อม ระบบปิดปุ่มเริ่มงานชั่วคราว';
       }
       return ready;
     } catch (err) {
@@ -39,14 +57,11 @@
     }
   }
 
-  // Replace the legacy download path that placed the master access key in the URL.
   try {
     window.downloadFile = secureDownload;
     downloadFile = secureDownload;
   } catch {}
 
-  // Delete safely: the Worker will cancel an active GitHub run first and return
-  // a retryable message instead of racing a runner that is still writing files.
   document.addEventListener('click', async event => {
     const button = event.target.closest?.('[data-delete-job]');
     if (!button) return;
@@ -73,10 +88,11 @@
 
   const speakerLabel = qs('#speakerSep')?.closest('label')?.querySelector('b');
   if (speakerLabel) {
-    speakerLabel.textContent = 'สลับโทนเสียงตามช่วงเว้นคำ (ทดลอง)';
-    speakerLabel.title = 'เป็นการประมาณจากช่วงเว้นเสียง ยังไม่ใช่ระบบแยกผู้พูดแบบ diarization';
+    speakerLabel.textContent = 'Auto Cast หลายเสียงตามช่วงบทสนทนา';
+    speakerLabel.title = 'ระบบเลือกโปรไฟล์เสียงตามช่วงบทสนทนาแบบอัตโนมัติ เป็น heuristic ไม่ใช่การพิสูจน์ตัวตนผู้พูด';
   }
 
+  loadFullAutoEnhancements();
   health();
   window.setInterval(() => {
     if (!document.hidden) health();
