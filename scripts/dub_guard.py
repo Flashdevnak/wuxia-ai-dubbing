@@ -6,11 +6,12 @@ import re
 from pathlib import Path
 
 import dub_chunk as base
+from voice_profiles import list_profile_voices, synthesize_profile, choose_profile_voice
 
 
-# Runtime hardening for the existing, battle-tested dubbing pipeline.
-# This wrapper intentionally keeps dub_chunk.py intact so rollback is one workflow line.
-AUDIO_PROFILE_VERSION = 4
+# Audio profile v5 adds multi-age Thai voice profiles and keeps the strict
+# translation/TTS completeness guard from v4. Older checkpoints are rebuilt.
+AUDIO_PROFILE_VERSION = 5
 MAX_TEMPO_RATIO = 1.18
 MAX_GAP_EXTENSION = 1.50
 
@@ -32,15 +33,12 @@ def _translation_bad(source: str, translated: str, target_lang: str) -> bool:
     if not out:
         return True
 
-    # Numbers / punctuation / short symbols can legitimately remain unchanged.
     if out == src:
         if target_lang == "th" and _contains_cjk(src):
             return True
         letters = re.sub(r"[\W\d_]+", "", src, flags=re.UNICODE)
         return len(letters) >= 4
 
-    # A Thai dub should not accidentally pass an untranslated Chinese sentence
-    # through to the Thai TTS voice after all translation fallbacks fail.
     if target_lang == "th" and _contains_cjk(src):
         cjk_count = len(re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]", out))
         thai_count = len(re.findall(r"[\u0e00-\u0e7f]", out))
@@ -71,8 +69,6 @@ def guarded_translate_texts(
     if not bad:
         return translated
 
-    # One final per-line Workers AI retry before failing the chunk. This is
-    # preferable to silently producing Thai audio with missing/untranslated lines.
     unresolved: list[int] = []
     for i in bad:
         duration = None
@@ -105,8 +101,6 @@ async def guarded_synthesize_many(plans: list[dict], concurrency: int = 4) -> No
 
     failed = [p for p in plans if not p.get("tts_ok")]
     if failed:
-        # Edge TTS already retries internally; give only failed lines one extra,
-        # low-concurrency pass to recover transient rate limits/network errors.
         await asyncio.sleep(1.0)
         await _original_synthesize_many(failed, concurrency=1)
 
@@ -120,11 +114,11 @@ async def guarded_synthesize_many(plans: list[dict], concurrency: int = 4) -> No
         )
 
 
+async def guarded_list_matching_voices(lang: str, mode: str) -> list[str]:
+    return await list_profile_voices(lang, mode, base.LOCALES)
+
+
 def guarded_run(cmd: list[str]) -> None:
-    # Improve the existing "keep music/SFX" mix without changing the proven
-    # ffmpeg graph structure. It still cannot perfectly separate dialogue from
-    # BGM, but it ducks the original soundtrack harder while Thai speech is active
-    # and lets ambience/music breathe more between Thai lines.
     safe_cmd = list(cmd)
     try:
         idx = safe_cmd.index("-filter_complex")
@@ -167,13 +161,14 @@ def guarded_mark_chunk_complete(self, job_id: str, index: int, total: int):
 
 
 def main() -> None:
-    # Keep the underlying implementation and durable checkpoint system, but make
-    # correctness fail-closed for Thai dubbing.
     base.AUDIO_PROFILE_VERSION = AUDIO_PROFILE_VERSION
     base.MAX_TEMPO_RATIO = MAX_TEMPO_RATIO
     base.MAX_GAP_EXTENSION = MAX_GAP_EXTENSION
     base.translate_texts = guarded_translate_texts
+    base.synthesize = synthesize_profile
     base.synthesize_many = guarded_synthesize_many
+    base.list_matching_voices = guarded_list_matching_voices
+    base.choose_voice = choose_profile_voice
     base.run = guarded_run
     base.WorkerClient.mark_chunk_complete = guarded_mark_chunk_complete
     base.main()
