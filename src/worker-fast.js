@@ -4,15 +4,17 @@ async function enrichHealth(response) {
   if (!response?.ok) return response;
   try {
     const data = await response.clone().json();
-    data.uploadAcceleration = 'parallel-multipart-v1';
+    data.uploadAcceleration = 'parallel-multipart-v2';
     data.uploadConcurrencyMax = 4;
     data.uploadResume = true;
     data.videoAndSeparateAudioParallel = true;
     data.mobileForegroundRecovery = true;
-    data.mobileForegroundRecoveryVersion = 'background-best-effort-v2';
+    data.mobileForegroundRecoveryVersion = 'foreground-watchdog-v3';
     data.mobileBackgroundUpload = true;
-    data.mobileBackgroundUploadMode = 'best-effort-v2';
+    data.mobileBackgroundUploadMode = 'best-effort-v3';
     data.mobileBackgroundUploadOsSuspendSafe = true;
+    data.mobileForegroundStallMs = 8000;
+    data.mobileUploadHardTimeoutMs = 120000;
     const headers = new Headers(response.headers);
     headers.set('content-type', 'application/json; charset=utf-8');
     headers.set('cache-control', 'no-store, no-cache, must-revalidate');
@@ -29,11 +31,11 @@ async function injectFastUpload(response) {
 
   let html = await response.text();
   if (!html.includes('upload-fast.js')) {
-    const script = '<script src="./upload-fast.js?v=parallel1" defer></script>';
+    const script = '<script src="./upload-fast.js?v=parallel2" defer></script>';
     html = html.includes('</body>') ? html.replace('</body>', `  ${script}\n</body>`) : `${html}\n${script}`;
   }
   if (!html.includes('mobile-upload-recovery.js')) {
-    const recovery = '<script src="./mobile-upload-recovery.js?v=background2" defer></script>';
+    const recovery = '<script src="./mobile-upload-recovery.js?v=foreground3" defer></script>';
     html = html.includes('</body>') ? html.replace('</body>', `  ${recovery}\n</body>`) : `${html}\n${recovery}`;
   }
 
