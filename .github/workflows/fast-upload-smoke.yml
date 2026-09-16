@@ -40,6 +40,7 @@ jobs:
           python - <<'PY'
           import concurrent.futures
           import os
+          import re
           import time
           import requests
 
@@ -60,11 +61,13 @@ jobs:
           assert int(health.get('mobileForegroundStallMs') or 0) == 8000, health
           assert int(health.get('mobileUploadHardTimeoutMs') or 0) == 120000, health
 
-          html = requests.get(base + '/?v=foreground3', timeout=30).text
-          assert 'upload-fast.js?v=parallel2' in html, 'upload-fast V2 runtime asset missing from HTML'
-          assert 'mobile-upload-recovery.js?v=foreground3' in html, 'foreground watchdog V3 runtime asset missing from HTML'
+          html = requests.get(base + '/', timeout=30).text
+          assert 'upload-fast.js' in html, 'upload-fast V2 runtime asset missing from HTML'
+          assert 'mobile-upload-recovery.js' in html, 'foreground watchdog V3 runtime asset missing from HTML'
+          assert 'studio-v2.js' in html, 'Studio V2 runtime asset missing from HTML'
+          assert not re.findall(r'(?:src|href)=["\'][^"\']+\?v=', html), 'versioned asset URLs must not be served'
 
-          asset = requests.get(base + '/upload-fast.js?v=parallel2', timeout=30).text
+          asset = requests.get(base + '/upload-fast.js', timeout=30).text
           for marker in (
               'parallel-v2',
               'parallelUpload',
@@ -75,7 +78,7 @@ jobs:
               assert marker in asset, f'missing upload accelerator marker: {marker}'
           assert 'xhr.timeout = 300000' not in asset, 'old five-minute XHR timeout is still deployed'
 
-          recovery = requests.get(base + '/mobile-upload-recovery.js?v=foreground3', timeout=30).text
+          recovery = requests.get(base + '/mobile-upload-recovery.js', timeout=30).text
           for marker in (
               'foreground-watchdog-v3',
               'STALE_FOREGROUND_MS = 6500',
