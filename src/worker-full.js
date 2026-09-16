@@ -169,12 +169,13 @@ async function enrichHealth(response, env) {
     const storageReady = data.driveReady === true;
     data.backend = 'cloudflare-r2-temp';
     data.storageReady = storageReady;
-    data.driveReady = storageReady; // legacy UI compatibility
+    data.driveReady = storageReady;
     data.retentionMinutes = retentionMinutes(env);
     data.afterDownloadMinutes = afterDownloadMinutes(env);
     data.temporaryStorage = true;
     data.voiceProfiles = true;
     data.hybridYoutubeTiming = true;
+    data.fullAutoUi = true;
     const headers = new Headers(response.headers);
     headers.set('content-type', 'application/json; charset=utf-8');
     headers.set('cache-control', 'no-store, no-cache, must-revalidate');
@@ -182,6 +183,31 @@ async function enrichHealth(response, env) {
   } catch {
     return response;
   }
+}
+
+async function injectFullAutoAssets(response) {
+  if (!response?.ok) return response;
+  const contentType = String(response.headers.get('content-type') || '');
+  if (!contentType.includes('text/html')) return response;
+
+  let html = await response.text();
+  if (!html.includes('full-auto.css')) {
+    const style = '<link rel="stylesheet" href="./full-auto.css?v=full-auto1" />';
+    html = html.includes('</head>') ? html.replace('</head>', `  ${style}\n</head>`) : `${style}\n${html}`;
+  }
+  if (!html.includes('safety.js')) {
+    const safety = '<script src="./safety.js?v=guard1" defer></script>';
+    html = html.includes('</body>') ? html.replace('</body>', `  ${safety}\n</body>`) : `${html}\n${safety}`;
+  }
+  if (!html.includes('full-auto.js')) {
+    const fullAuto = '<script src="./full-auto.js?v=full-auto1" defer></script>';
+    html = html.includes('</body>') ? html.replace('</body>', `  ${fullAuto}\n</body>`) : `${html}\n${fullAuto}`;
+  }
+
+  const headers = new Headers(response.headers);
+  headers.delete('content-length');
+  headers.set('cache-control', 'no-store, no-cache, must-revalidate');
+  return new Response(html, { status: response.status, headers });
 }
 
 export default {
@@ -192,10 +218,14 @@ export default {
       && Boolean(url.searchParams.get('ticket'));
     const downloadKey = isDownload ? String(url.searchParams.get('key') || '') : '';
 
-    const response = await safeWorker.fetch(request, env, ctx);
+    let response = await safeWorker.fetch(request, env, ctx);
 
     if (request.method === 'GET' && url.pathname === '/api/health') {
       return enrichHealth(response, env);
+    }
+
+    if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
+      response = await injectFullAutoAssets(response);
     }
 
     if (isDownload && response.ok && jobOutputId(downloadKey)) {
