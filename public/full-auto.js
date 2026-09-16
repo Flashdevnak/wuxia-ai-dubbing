@@ -109,7 +109,7 @@
       const text = $('#voiceProfileHint');
       if (text) {
         text.textContent = select.value === 'auto-cast'
-          ? 'ระบบสลับโปรไฟล์เสียงไทยตามช่วงบทสนทนา และล็อกโทนในช่วงเดียวกันอัตโนมัติ'
+          ? 'ระบบสลับโปรไฟล์เสียงไทยตามช่วงบทสนทนา และรักษาโทนในช่วงเดียวกันอัตโนมัติ'
           : 'ใช้โปรไฟล์เสียงที่เลือกกับบทพูดทั้งหมด พร้อมปรับความเร็วและระดับเสียงให้เหมาะกับช่วงวัย';
       }
     });
@@ -119,7 +119,7 @@
       const hint = document.createElement('div');
       hint.id = 'voiceProfileHint';
       hint.className = 'voice-profile-hint';
-      hint.textContent = 'ระบบสลับโปรไฟล์เสียงไทยตามช่วงบทสนทนา และล็อกโทนในช่วงเดียวกันอัตโนมัติ';
+      hint.textContent = 'ระบบสลับโปรไฟล์เสียงไทยตามช่วงบทสนทนา และรักษาโทนในช่วงเดียวกันอัตโนมัติ';
       optionGrid.insertAdjacentElement('afterend', hint);
     }
 
@@ -139,6 +139,18 @@
     }
   }
 
+  function replaceLegacyStorageCopy() {
+    document.querySelectorAll('.hero-tags span').forEach(node => {
+      if (/Google Drive/i.test(node.textContent || '')) node.textContent = '☁ พื้นที่ชั่วคราวอัตโนมัติ';
+    });
+
+    const storagePanelText = $('.storage-panel p');
+    if (storagePanelText) storagePanelText.innerHTML = '<b id="ringText">0.00 GB</b> พื้นที่ชั่วคราวของงานพากย์';
+
+    const cleanupLabel = $('#autoCleanup')?.closest('label')?.querySelector('b');
+    if (cleanupLabel) cleanupLabel.textContent = 'ลบไฟล์ทำงานชั่วคราวอัตโนมัติ';
+  }
+
   function installTemporaryStorageCopy() {
     const side = $('.side-footer .rank-card');
     if (side) side.innerHTML = '<span>ระบบพร้อมใช้งาน</span><b>ไฟล์ชั่วคราว แยกจากโปรเจกต์อื่น</b><small>ลบอัตโนมัติหลังใช้งาน</small>';
@@ -148,6 +160,8 @@
     if (storagePage) storagePage.innerHTML = '<h1>พื้นที่ชั่วคราว</h1><p>ใช้เฉพาะงานพากย์นี้ ระบบเก็บผลลัพธ์สูงสุดประมาณ 30 นาที และเข้าคิวลบประมาณ 10 นาทีหลังเริ่มดาวน์โหลด</p>';
     const mini = $('.storage-mini span');
     if (mini) mini.textContent = 'ชั่วคราว';
+
+    replaceLegacyStorageCopy();
 
     const panel = $('.create-panel');
     if (panel && !$('#temporaryPolicy')) {
