@@ -1,0 +1,137 @@
+name: Local R2 Storage Smoke
+
+on:
+  pull_request:
+    paths:
+      - 'src/storage.js'
+      - 'src/worker-full.js'
+      - 'src/worker-safe.js'
+      - 'wrangler.jsonc'
+      - '.github/workflows/local-r2-smoke.yml'
+  push:
+    branches: [codex/full-auto-dubbing-v1]
+    paths:
+      - 'src/storage.js'
+      - 'src/worker-full.js'
+      - 'src/worker-safe.js'
+      - 'wrangler.jsonc'
+      - '.github/workflows/local-r2-smoke.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  local-r2-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: npm install
+      - run: python -m pip install --disable-pip-version-check requests
+      - name: Start local Worker with R2
+        run: |
+          cat > .dev.vars <<'EOF'
+          ACCESS_KEY=local-test-access
+          WORKER_SHARED_TOKEN=local-test-worker
+          GITHUB_TOKEN=local-test-github
+          EOF
+          npx wrangler dev --local --port 8787 > /tmp/wrangler-local.log 2>&1 &
+          echo $! > /tmp/wrangler.pid
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8787/api/health >/tmp/health.json 2>/dev/null; then
+              cat /tmp/health.json
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/wrangler-local.log
+          exit 1
+      - name: Verify multipart upload resume download delete
+        run: |
+          python - <<'PY'
+          import hashlib, json, requests
+
+          base = 'http://127.0.0.1:8787'
+          headers = {'x-access-key': 'local-test-access'}
+          health = requests.get(base + '/api/health', timeout=15).json()
+          assert health.get('storageReady') is True, health
+          assert health.get('backend') == 'cloudflare-r2-temp', health
+          assert health.get('temporaryStorage') is True, health
+
+          part = 8 * 1024 * 1024
+          source = (b'A' * part) + (b'B' * (4 * 1024 * 1024 + 321))
+          started = requests.post(
+              base + '/api/uploads/start', headers=headers,
+              json={'name': 'local-r2-smoke.bin', 'size': len(source), 'type': 'application/octet-stream'},
+              timeout=30,
+          ).json()
+          assert started.get('key') and started.get('uploadId'), started
+          assert int(started.get('partSize') or 0) == part, started
+          key, upload_id = started['key'], started['uploadId']
+
+          first = requests.post(
+              base + '/api/uploads/chunk', headers=headers,
+              data={'key': key, 'uploadId': upload_id, 'partNumber': '1'},
+              files={'chunk': ('part1.bin', source[:part], 'application/octet-stream')},
+              timeout=60,
+          )
+          first.raise_for_status()
+          assert int(first.json().get('partNumber') or 0) == 1, first.text
+
+          status = requests.post(
+              base + '/api/uploads/status', headers=headers,
+              json={'key': key, 'uploadId': upload_id}, timeout=30,
+          )
+          status.raise_for_status()
+          assert int(status.json().get('nextOffset') or -1) == part, status.text
+
+          second = requests.post(
+              base + '/api/uploads/chunk', headers=headers,
+              data={'key': key, 'uploadId': upload_id, 'partNumber': '2'},
+              files={'chunk': ('part2.bin', source[part:], 'application/octet-stream')},
+              timeout=60,
+          )
+          second.raise_for_status()
+
+          done = requests.post(
+              base + '/api/uploads/complete', headers=headers,
+              json={'key': key, 'uploadId': upload_id}, timeout=60,
+          )
+          done.raise_for_status()
+          assert int(done.json().get('size') or -1) == len(source), done.text
+
+          ticket = requests.post(
+              base + '/api/files/download-ticket', headers=headers,
+              json={'key': key}, timeout=30,
+          )
+          ticket.raise_for_status()
+          token = ticket.json()['ticket']
+          downloaded = requests.get(
+              base + '/api/files/download',
+              params={'key': key, 'ticket': token}, timeout=90,
+          )
+          downloaded.raise_for_status()
+          assert hashlib.sha256(downloaded.content).digest() == hashlib.sha256(source).digest()
+
+          storage = requests.get(base + '/api/storage', headers=headers, timeout=30)
+          storage.raise_for_status()
+          assert storage.json().get('provider') == 'cloudflare-r2-temp', storage.text
+
+          deleted = requests.delete(base + '/api/files', headers=headers, params={'key': key}, timeout=30)
+          deleted.raise_for_status()
+          assert int(deleted.json().get('freedBytes') or 0) == len(source), deleted.text
+          print('LOCAL_R2_MULTIPART_SMOKE=PASS')
+          PY
+      - name: Print local Worker log on failure
+        if: failure()
+        run: cat /tmp/wrangler-local.log || true
+      - name: Stop local Worker
+        if: always()
+        run: |
+          if [ -f /tmp/wrangler.pid ]; then kill "$(cat /tmp/wrangler.pid)" 2>/dev/null || true; fi

@@ -67,10 +67,10 @@ jobs:
           pathlib.Path('job.json').write_text(os.environ['JOB_JSON'], encoding='utf-8')
           PY
       - id: prepare
-        name: Prepare video chunks
+        name: Prepare video chunks and hybrid YouTube timing
         if: ${{ steps.control.outputs.paused != 'true' }}
         run: |
-          python scripts/prepare_job.py \
+          python scripts/prepare_job_full.py \
             --job job.json \
             --worker-url "$WORKER_URL" \
             --token "$WORKER_SHARED_TOKEN" \
