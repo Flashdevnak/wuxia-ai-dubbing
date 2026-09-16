@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import re
 from datetime import timedelta
 from pathlib import Path
 
@@ -30,6 +31,30 @@ def build_cookie_file() -> Path | None:
     return path
 
 
+def _contains_cjk(text: str) -> bool:
+    return bool(re.search(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]", str(text or "")))
+
+
+def _translation_bad(source: str, translated: str, target_lang: str) -> bool:
+    src = str(source or "").strip()
+    out = str(translated or "").strip()
+    if not src:
+        return False
+    if not out:
+        return True
+    if out == src:
+        if target_lang == "th" and _contains_cjk(src):
+            return True
+        letters = re.sub(r"[\W\d_]+", "", src, flags=re.UNICODE)
+        return len(letters) >= 4
+    if target_lang == "th" and _contains_cjk(src):
+        cjk_count = len(re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]", out))
+        thai_count = len(re.findall(r"[\u0e00-\u0e7f]", out))
+        if cjk_count >= 3 and thai_count == 0:
+            return True
+    return False
+
+
 def translate_entries(
     client: WorkerClient,
     entries: list[dict],
@@ -46,13 +71,46 @@ def translate_entries(
         translated = client.translate(texts, source_lang, target_lang, durations)
         if len(translated) != len(batch):
             raise RuntimeError("จำนวนบรรทัดคำแปลไม่ตรงกับคำบรรยายต้นฉบับ")
-        for item, text in zip(batch, translated):
+
+        for idx, (item, source, text) in enumerate(zip(batch, texts, translated)):
+            final = str(text or "").strip()
+            if source_lang != target_lang and _translation_bad(source, final, target_lang):
+                retry = client.translate([source], source_lang, target_lang, [durations[idx]])
+                candidate = str(retry[0] if retry else "").strip()
+                if _translation_bad(source, candidate, target_lang):
+                    raise RuntimeError(
+                        f"คำแปลบรรทัด {start + idx + 1} ยังไม่เป็นภาษาปลายทาง "
+                        "ระบบหยุดเพื่อไม่ส่งออกคำบรรยายผิดภาษา"
+                    )
+                final = candidate
             out.append({
                 "start": float(item.get("start") or 0),
                 "duration": max(0.05, float(item.get("duration") or 0.05)),
-                "text": str(text or item.get("text") or "").strip(),
+                "text": final,
             })
     return out
+
+
+def validate_ready_entries(entries: list[dict], target_lang: str) -> None:
+    if not entries:
+        raise RuntimeError("ไม่พบข้อความคำบรรยายในวิดีโอนี้")
+    if target_lang != "th":
+        return
+    # YouTube may say a target track is ready, but malformed/expired HAR data can
+    # still return source-language text. Reject clearly Chinese lines before export.
+    bad = []
+    for i, item in enumerate(entries):
+        value = str(item.get("text") or "").strip()
+        cjk = len(re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]", value))
+        thai = len(re.findall(r"[\u0e00-\u0e7f]", value))
+        if cjk >= 4 and thai == 0:
+            bad.append(i + 1)
+    if bad:
+        preview = ", ".join(map(str, bad[:8]))
+        raise RuntimeError(
+            f"พบคำบรรยายที่ยังเป็นภาษาจีนในบรรทัด {preview}"
+            f"{'…' if len(bad) > 8 else ''} ระบบไม่ส่งออกไฟล์ไทยที่ผิดภาษา"
+        )
 
 
 def write_srt(entries: list[dict], path: Path) -> None:
@@ -117,10 +175,13 @@ def main() -> None:
 
         if bool(data.get("targetReady")):
             final_entries = entries
+            validate_ready_entries(final_entries, target_lang)
             client.patch_job(job_id, progress=65, stage=f"พบคำบรรยายภาษา {target_lang} แล้ว")
         else:
-            client.patch_job(job_id, progress=45, stage=f"พบคำบรรยายภาษา {data.get('language') or source_lang} กำลังแปลเป็น {target_lang}")
-            final_entries = translate_entries(client, entries, str(data.get("language") or source_lang), target_lang)
+            detected_source = str(data.get("language") or source_lang)
+            client.patch_job(job_id, progress=45, stage=f"พบคำบรรยายภาษา {detected_source} กำลังแปลเป็น {target_lang}")
+            final_entries = translate_entries(client, entries, detected_source, target_lang)
+            validate_ready_entries(final_entries, target_lang)
 
         work = Path("work_transcript")
         work.mkdir(parents=True, exist_ok=True)
@@ -143,7 +204,7 @@ def main() -> None:
             transcriptXmlKey=xml_key,
             subtitleKey=srt_key,
             transcriptLanguage=target_lang,
-            transcriptSource=("bunny-har" if caption_url else "youtube"),
+            transcriptSource=("bunny-har" if (caption_url or caption_key) else "youtube"),
             duration=end_time,
             sizeBytes=int(xml_result.get("size") or 0) + int(srt_result.get("size") or 0),
             error=None,
