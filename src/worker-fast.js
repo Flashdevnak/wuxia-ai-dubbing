@@ -9,7 +9,10 @@ async function enrichHealth(response) {
     data.uploadResume = true;
     data.videoAndSeparateAudioParallel = true;
     data.mobileForegroundRecovery = true;
-    data.mobileForegroundRecoveryVersion = 'foreground-resume-v1';
+    data.mobileForegroundRecoveryVersion = 'background-best-effort-v2';
+    data.mobileBackgroundUpload = true;
+    data.mobileBackgroundUploadMode = 'best-effort-v2';
+    data.mobileBackgroundUploadOsSuspendSafe = true;
     const headers = new Headers(response.headers);
     headers.set('content-type', 'application/json; charset=utf-8');
     headers.set('cache-control', 'no-store, no-cache, must-revalidate');
@@ -30,7 +33,7 @@ async function injectFastUpload(response) {
     html = html.includes('</body>') ? html.replace('</body>', `  ${script}\n</body>`) : `${html}\n${script}`;
   }
   if (!html.includes('mobile-upload-recovery.js')) {
-    const recovery = '<script src="./mobile-upload-recovery.js?v=foreground1" defer></script>';
+    const recovery = '<script src="./mobile-upload-recovery.js?v=background2" defer></script>';
     html = html.includes('</body>') ? html.replace('</body>', `  ${recovery}\n</body>`) : `${html}\n${recovery}`;
   }
 
