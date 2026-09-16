@@ -96,19 +96,28 @@ jobs:
           assert health.get('activeDeleteProtection') is True, health
           assert health.get('separateAudioInput') is True, health
           assert health.get('humanStudioUi') is True, health
-          print('health safety + R2 guard: OK')
+          assert health.get('uploadAcceleration') == 'resilient-multipart-v4', health
+          assert int(health.get('uploadEngineVersion') or 0) == 4, health
+          assert health.get('uploadSessionMigration') == 'v2-v3-to-v4', health
+          assert health.get('versionQueryRequired') is False, health
+          assert health.get('storageCompaction') is True, health
+          assert health.get('directSeparateAudioSegmentation') is True, health
+          assert health.get('releaseCompletedSourceChunks') is True, health
+          print('health safety + R2 guard + storage compaction: OK')
 
           _, html_bytes = call('/', expect_json=False)
           html = html_bytes.decode('utf-8', 'replace')
-          for marker in ('safety.js', 'studio-ui.js', 'studio-ui.css', 'studio-v2.js', 'studio-v2.css', 'upload-fast.js', 'mobile-upload-recovery.js', 'pair-recovery.js'):
+          for marker in ('safety.js', 'studio-ui.js', 'studio-ui.css', 'studio-v2.js', 'studio-v2.css', 'upload-migrate-v4.js', 'upload-engine-v4.js', 'pair-recovery.js'):
               assert marker in html, f'missing runtime asset: {marker}'
+          assert 'upload-fast.js' not in html, 'retired V2 uploader is still served'
+          assert 'mobile-upload-recovery.js' not in html, 'retired V3 watchdog is still served'
           assert 'สร้างงานพากย์ไทย' in html, 'streamlined Studio V2 workflow missing'
           assert 'อัปโหลดวิดีโอจากเครื่อง' in html, 'primary upload workflow missing'
           assert 'ใช้ลิงก์ YouTube แทน' in html, 'experimental YouTube section missing'
           assert 'projectSlot' in html and 'toastHost' in html, 'Studio V2 UX anchors missing'
           assert not re.findall(r'(?:src|href)=["\'][^"\']+\?v=', html), 'version query parameters still served in HTML'
           assert 'full-auto.js' in html, 'legacy full-auto suppression marker missing'
-          print('runtime safety + streamlined Studio V2 assets: OK')
+          print('runtime safety + streamlined Studio V2 + V4 assets: OK')
 
           _, studio_js_bytes = call('/studio-v2.js', expect_json=False)
           studio_js = studio_js_bytes.decode('utf-8', 'replace')
@@ -168,7 +177,8 @@ jobs:
         run: |
           echo '### Worker safety smoke passed' >> "$GITHUB_STEP_SUMMARY"
           echo '- Safety + temporary R2 guards exposed by /api/health' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Streamlined Studio V2 and clean asset URLs verified' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Streamlined Studio V2 and resilient V4 upload assets verified' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Storage compaction runtime flags verified' >> "$GITHUB_STEP_SUMMARY"
           echo '- Separate video + audio input verified' >> "$GITHUB_STEP_SUMMARY"
           echo '- Project identity reset behavior verified' >> "$GITHUB_STEP_SUMMARY"
           echo '- Signed resumable upload IDs verified' >> "$GITHUB_STEP_SUMMARY"
