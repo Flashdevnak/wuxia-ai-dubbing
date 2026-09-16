@@ -32,20 +32,23 @@ jobs:
           echo "Account configured: $([ -n \"${CLOUDFLARE_ACCOUNT_ID:-}\" ] && echo yes || echo no)"
           echo "Token configured: $([ -n \"${CLOUDFLARE_API_TOKEN:-}\" ] && echo yes || echo no)"
           echo "--- R2 bucket list ---"
+          set +e
           LIST="$(npx wrangler r2 bucket list 2>&1)"
           LIST_RC=$?
+          set -e
           printf '%s\n' "$LIST"
           echo "list_rc=$LIST_RC"
           if [ "$LIST_RC" -ne 0 ]; then
-            echo "R2_LIST_FAILED=1" >> "$GITHUB_ENV"
             exit "$LIST_RC"
           fi
           if printf '%s\n' "$LIST" | grep -Fq "$BUCKET"; then
             echo "R2 bucket already exists: $BUCKET"
           else
             echo "--- creating $BUCKET ---"
+            set +e
             CREATE="$(npx wrangler r2 bucket create "$BUCKET" 2>&1)"
             CREATE_RC=$?
+            set -e
             printf '%s\n' "$CREATE"
             echo "create_rc=$CREATE_RC"
             exit "$CREATE_RC"
