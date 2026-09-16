@@ -34,6 +34,8 @@ async function enrichHealth(response) {
       mobileUploadHardTimeoutMs: 180000,
       uploadServerReconcile: true,
       uploadRetryAttempts: 12,
+      uploadSessionMigration: 'v2-v3-to-v4',
+      uploadSessionMigrationPreservesPartial: true,
       studioUiVersion: 2,
       versionQueryRequired: false,
     });
@@ -60,10 +62,12 @@ async function rewriteHtml(response) {
   html = html.replace(/((?:src|href)=["'][^"']+\.(?:js|css))\?v=[^"']+(["'])/gi, '$1$2');
 
   if (!html.includes('upload-engine-v4.js')) {
-    const script = '<script src="./upload-engine-v4.js" defer></script>';
+    const migrate = '<script src="./upload-migrate-v4.js"></script>';
+    const engine = '<script src="./upload-engine-v4.js" defer></script>';
+    const block = `${migrate}\n  ${engine}`;
     html = html.includes('<script src="./studio-v2.js"')
-      ? html.replace('<script src="./studio-v2.js" defer></script>', `${script}\n  <script src="./studio-v2.js" defer></script>`)
-      : html.replace('</body>', `  ${script}\n</body>`);
+      ? html.replace('<script src="./studio-v2.js" defer></script>', `${block}\n  <script src="./studio-v2.js" defer></script>`)
+      : html.replace('</body>', `  ${block}\n</body>`);
   }
 
   const headers = new Headers(response.headers);
@@ -81,6 +85,7 @@ function isCriticalAsset(pathname) {
     '/studio-ui.js',
     '/studio-v2.js',
     '/studio-v2.css',
+    '/upload-migrate-v4.js',
     '/upload-engine-v4.js',
     '/pair-recovery.js',
     '/safety.js',
