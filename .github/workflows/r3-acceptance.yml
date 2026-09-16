@@ -1,0 +1,33 @@
+name: R3 Smart Dubbing Acceptance
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/r3_studio.py'
+      - 'scripts/test_r3_studio.py'
+      - '.github/workflows/r3-acceptance.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/r3_studio.py'
+      - 'scripts/test_r3_studio.py'
+      - '.github/workflows/r3-acceptance.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Compile R3 engine
+        run: python -m py_compile scripts/r3_studio.py scripts/test_r3_studio.py
+      - name: Run R3 acceptance
+        working-directory: scripts
+        run: python test_r3_studio.py
