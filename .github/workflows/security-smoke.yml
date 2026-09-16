@@ -1,0 +1,89 @@
+name: Worker Safety Smoke
+
+on:
+  workflow_run:
+    workflows: ["Deploy Cloudflare Backend"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  safety-smoke:
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      WORKER_URL: https://wuxia-ai-dubbing.26nak-testdev.workers.dev
+      ACCESS_KEY: ${{ secrets.WUXIA_ACCESS_KEY }}
+    steps:
+      - name: Verify safety wrapper and secure upload session
+        run: |
+          python - <<'PY'
+          import json, os, urllib.error, urllib.request
+
+          base = os.environ['WORKER_URL'].rstrip('/')
+          access = os.environ['ACCESS_KEY']
+          ua = 'Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 Chrome/140.0 Mobile Safari/537.36'
+
+          def call(path, method='GET', payload=None, auth=False, expect_json=True):
+              body = None if payload is None else json.dumps(payload).encode()
+              headers = {'User-Agent': ua, 'Accept': 'application/json,*/*'}
+              if auth:
+                  headers['x-access-key'] = access
+              if body is not None:
+                  headers['content-type'] = 'application/json'
+              req = urllib.request.Request(base + path, data=body, headers=headers, method=method)
+              try:
+                  with urllib.request.urlopen(req, timeout=90) as r:
+                      raw = r.read()
+                      if not expect_json:
+                          return r.status, raw.decode('utf-8', 'replace')
+                      return r.status, json.loads(raw.decode('utf-8')) if raw else {}
+              except urllib.error.HTTPError as e:
+                  raw = e.read().decode('utf-8', 'replace')
+                  raise RuntimeError(f'{method} {path} -> {e.code}: {raw[:1200]}')
+
+          _, health = call('/api/health')
+          assert health.get('ok') is True, health
+          assert health.get('driveReady') is True, health
+          assert health.get('safety') == 'guard-v1', health
+          assert health.get('signedUploads') is True, health
+          assert health.get('downloadTickets') is True, health
+          assert health.get('activeDeleteProtection') is True, health
+          print('health safety guard: OK')
+
+          _, html = call('/?smoke=safety', expect_json=False)
+          assert 'safety.js?v=guard1' in html, 'safety.js was not injected into Worker HTML'
+          print('runtime UI safety guard: OK')
+
+          _, started = call('/api/uploads/start', 'POST', {
+              'name': '__safety_smoke__.bin',
+              'size': 16,
+              'type': 'application/octet-stream',
+          }, auth=True)
+          key = started.get('key')
+          upload_id = started.get('uploadId')
+          assert key and isinstance(upload_id, str) and upload_id.startswith('u1.'), started
+          assert 'www.googleapis.com' not in upload_id, 'raw Google resumable session leaked to client'
+          print('signed resumable upload id: OK')
+
+          _, ticket = call('/api/files/download-ticket', 'POST', {'key': key}, auth=True)
+          value = ticket.get('ticket')
+          assert isinstance(value, str) and value.startswith('d1.'), ticket
+          assert int(ticket.get('expiresIn') or 0) <= 120, ticket
+          print('short-lived download ticket: OK')
+
+          _, aborted = call('/api/uploads/abort', 'POST', {'key': key, 'uploadId': upload_id}, auth=True)
+          assert aborted.get('ok') is True, aborted
+          print('signed upload abort/cleanup: OK')
+          PY
+
+      - name: Safety summary
+        run: |
+          echo '### Worker safety smoke passed' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Safety guard exposed by /api/health' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Runtime safety.js injection present' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Signed resumable upload IDs verified' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Short-lived download tickets verified' >> "$GITHUB_STEP_SUMMARY"

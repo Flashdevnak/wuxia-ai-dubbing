@@ -97,14 +97,17 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-      - name: Ensure ffmpeg
+      - name: Ensure ffmpeg and Thai subtitle font
         run: |
-          if command -v ffmpeg >/dev/null 2>&1; then
-            ffmpeg -version | head -n 1
-          else
+          NEED_APT=0
+          command -v ffmpeg >/dev/null 2>&1 || NEED_APT=1
+          if ! fc-match "Noto Sans Thai" 2>/dev/null | grep -qi "Noto"; then NEED_APT=1; fi
+          if [ "$NEED_APT" = "1" ]; then
             sudo apt-get update -qq
-            sudo apt-get install -y ffmpeg
+            sudo apt-get install -y ffmpeg fonts-noto-core
           fi
+          ffmpeg -version | head -n 1
+          fc-match "Noto Sans Thai" | head -n 1
       - name: Cache Whisper model
         uses: actions/cache@v4
         with:
@@ -120,9 +123,9 @@ jobs:
           import os, pathlib
           pathlib.Path('job.json').write_text(os.environ['JOB_JSON'], encoding='utf-8')
           PY
-      - name: Dub chunk ${{ matrix.index }}
+      - name: Dub chunk ${{ matrix.index }} with Thai quality guard
         run: |
-          python scripts/dub_chunk.py \
+          python scripts/dub_guard.py \
             --job job.json \
             --worker-url "$WORKER_URL" \
             --token "$WORKER_SHARED_TOKEN" \
