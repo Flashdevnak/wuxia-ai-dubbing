@@ -46,25 +46,28 @@ jobs:
           assert status == 200 and health.get('ok') is True, health
           assert health.get('r3SmartStudio') is True, health
           assert int(health.get('r3Version') or 0) == 3, health
-          for key in ('contextTranslation','glossaryMemory','deterministicCasting','timingRescue','qualityGate','segmentRepair','batchQueue','quotaCacheGuard'):
+          for key in ('contextTranslation','glossaryMemory','deterministicCasting','timingRescue','qualityGate','finalQualityGate','segmentRepair','batchQueue','quotaCacheGuard'):
               assert health.get(key) is True, (key, health)
-          print('R3 health contract: OK')
+          print('R3 health + final gate contract: OK')
 
           status, html = call('/?smoke=r3', expect_json=False)
           assert status == 200, status
           assert 'r3-studio.js?v=r3-1' in html, 'missing R3 JS runtime injection'
           assert 'r3-studio.css?v=r3-1' in html, 'missing R3 CSS runtime injection'
+          assert 'Smart Dubbing Studio R3' in html or 'r3-studio.js' in html
           print('R3 UI injection: OK')
 
           status, denied = call('/api/r3/batch', 'POST', {'items':[{'sourceUrl':'https://youtu.be/example'}]})
           assert status == 401, (status, denied)
           status, denied = call('/api/r3/jobs/not-a-real-job/repair', 'POST', {'chunks':[0], 'action':'retranslate'})
           assert status == 401, (status, denied)
-          print('R3 protected routes: OK')
+          status, denied = call('/api/internal/complete', 'POST', {'jobId':'not-a-real-job','outputKey':'outputs/x/a.mp4','duration':1,'sizeBytes':1})
+          assert status == 401, (status, denied)
+          print('R3 protected routes + final gate boundary: OK')
           PY
       - name: Summary
         run: |
           echo '### R3 runtime smoke passed' >> "$GITHUB_STEP_SUMMARY"
-          echo '- R3 health flags live' >> "$GITHUB_STEP_SUMMARY"
+          echo '- R3 health and final Quality Gate flags live' >> "$GITHUB_STEP_SUMMARY"
           echo '- Smart Studio JS/CSS injected in Worker HTML' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Batch and repair routes protected' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Batch, repair and final-complete routes protected' >> "$GITHUB_STEP_SUMMARY"
