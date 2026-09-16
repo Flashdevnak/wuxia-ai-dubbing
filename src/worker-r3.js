@@ -1,5 +1,5 @@
 import fullWorker from './worker-full.js';
-import { deleteLogical, readJob, writeJob } from './storage.js';
+import { deleteLogical, readJob, resolveLogical, writeJob } from './storage.js';
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' };
 
@@ -103,9 +103,7 @@ async function createOneJob(request, env, ctx, url, body) {
   const response = await fullWorker.fetch(forwarded, env, ctx);
   if (!response.ok) return { response, data: null };
   const data = await response.clone().json();
-  if (data?.job?.id) {
-    data.job = await enrichJob(env, data.job.id, body) || data.job;
-  }
+  if (data?.job?.id) data.job = await enrichJob(env, data.job.id, body) || data.job;
   return {
     response: new Response(JSON.stringify(data), { status: response.status, headers: response.headers }),
     data,
@@ -189,6 +187,56 @@ async function handleRepair(request, env, url, id) {
   return json({ ok: dispatch.triggered, job, dispatch }, dispatch.triggered ? 202 : 502);
 }
 
+async function handleInternalComplete(request, env, ctx, url) {
+  if (!workerAuthorized(request, env)) return json({ error: 'worker unauthorized' }, 401);
+  const body = await request.clone().json().catch(() => ({}));
+  const id = cleanText(body.jobId, 100);
+  const job = id ? await readJob(env, id) : null;
+  if (!job) return json({ error: 'R3 Quality Gate: job not found' }, 404);
+
+  const errors = [];
+  const outputKey = String(body.outputKey || '');
+  const duration = Number(body.duration || 0);
+  const sizeBytes = Number(body.sizeBytes || 0);
+  if (!outputKey.startsWith(`outputs/${id}/`)) errors.push('output_key_invalid');
+  if (!(duration > 0)) errors.push('duration_invalid');
+  if (!(sizeBytes > 0)) errors.push('output_size_invalid');
+  const output = outputKey ? await resolveLogical(env, outputKey) : null;
+  if (!output?.id || Number(output.size || 0) <= 0) errors.push('output_missing');
+
+  const total = Math.max(0, Number(job.chunkTotal || 0));
+  if (total <= 0) errors.push('chunk_total_invalid');
+  const missing = [];
+  for (let i = 0; i < total; i += 1) {
+    const n = String(i).padStart(5, '0');
+    const [checkpoint, meta, chunk] = await Promise.all([
+      resolveLogical(env, `_state/${id}/chunks/${n}.json`),
+      resolveLogical(env, `temp/${id}/meta/chunk_${n}.json`),
+      resolveLogical(env, `temp/${id}/dub/chunk_${n}.ts`),
+    ]);
+    if (!checkpoint?.id || !meta?.id || !chunk?.id || Number(chunk?.size || 0) <= 0) missing.push(i);
+  }
+  if (missing.length) errors.push(`chunks_missing:${missing.slice(0, 30).join(',')}`);
+  if (job.subtitles !== false && !body.subtitleKey) errors.push('subtitle_missing');
+
+  if (errors.length) {
+    job.r3FinalGate = { status: 'failed', errors, checkedAt: new Date().toISOString() };
+    await writeJob(env, job);
+    return json({ error: 'R3 Quality Gate ไม่ผ่าน', errors }, 409);
+  }
+
+  job.r3FinalGate = {
+    status: 'pass',
+    errors: [],
+    checkedAt: new Date().toISOString(),
+    chunks: total,
+    duration,
+    sizeBytes: Math.max(sizeBytes, Number(output?.size || 0)),
+  };
+  await writeJob(env, job);
+  return fullWorker.fetch(request, env, ctx);
+}
+
 async function enrichHealth(response) {
   if (!response.ok) return response;
   const data = await response.clone().json().catch(() => null);
@@ -201,6 +249,7 @@ async function enrichHealth(response) {
     deterministicCasting: true,
     timingRescue: true,
     qualityGate: true,
+    finalQualityGate: true,
     segmentRepair: true,
     batchQueue: true,
     quotaCacheGuard: true,
@@ -211,12 +260,8 @@ async function enrichHealth(response) {
 async function injectR3(response) {
   if (!response.ok || !String(response.headers.get('content-type') || '').includes('text/html')) return response;
   let html = await response.text();
-  if (!html.includes('r3-studio.css')) {
-    html = html.replace('</head>', '  <link rel="stylesheet" href="./r3-studio.css?v=r3-1" />\n</head>');
-  }
-  if (!html.includes('r3-studio.js')) {
-    html = html.replace('</body>', '  <script src="./r3-studio.js?v=r3-1" defer></script>\n</body>');
-  }
+  if (!html.includes('r3-studio.css')) html = html.replace('</head>', '  <link rel="stylesheet" href="./r3-studio.css?v=r3-1" />\n</head>');
+  if (!html.includes('r3-studio.js')) html = html.replace('</body>', '  <script src="./r3-studio.js?v=r3-1" defer></script>\n</body>');
   const headers = new Headers(response.headers);
   headers.delete('content-length');
   headers.set('cache-control', 'no-store, no-cache, must-revalidate');
@@ -235,6 +280,7 @@ export default {
       const job = await readJob(env, id);
       return job ? json({ job }) : json({ error: 'not found' }, 404);
     }
+    if (url.pathname === '/api/internal/complete' && request.method === 'POST') return handleInternalComplete(request, env, ctx, url);
 
     if (url.pathname === '/api/jobs' && request.method === 'POST') {
       const body = await request.clone().json().catch(() => ({}));
