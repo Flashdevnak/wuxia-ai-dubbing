@@ -21,6 +21,7 @@ jobs:
           node --check public/app.js
           node --check src/worker.js
           node --check src/storage.js
+          node --check src/youtube.js
       - name: Python syntax check
         run: |
           python -m py_compile \
@@ -28,6 +29,8 @@ jobs:
             scripts/prepare_job.py \
             scripts/dub_chunk.py \
             scripts/dub_guard.py \
+            scripts/extract_transcript_job.py \
+            scripts/youtube_transcript.py \
             scripts/finalize_job.py
       - name: Verify required files
         run: |
@@ -36,16 +39,20 @@ jobs:
           test -f public/app.js
           test -f src/worker.js
           test -f src/storage.js
+          test -f src/youtube.js
           test -f wrangler.jsonc
           test -f requirements.txt
           test -f scripts/dub_guard.py
           test -f .github/workflows/dubbing.yml
+          test -f .github/workflows/transcript.yml
+          test -f .github/workflows/thai-media-smoke.yml
           test -f .github/workflows/deploy-cloudflare.yml
       - name: Verify guarded dubbing workflow
         run: |
           grep -q "python scripts/dub_guard.py" .github/workflows/dubbing.yml
           grep -q "Noto Sans Thai" .github/workflows/dubbing.yml
           grep -q "AUDIO_PROFILE_VERSION = 4" scripts/dub_guard.py
+          grep -q "ระบบไม่ส่งออกไฟล์ไทยที่ผิดภาษา" scripts/extract_transcript_job.py
       - name: Cloudflare Worker bundle dry-run
         run: |
           npm install
