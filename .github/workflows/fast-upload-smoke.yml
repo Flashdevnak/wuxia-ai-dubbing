@@ -28,14 +28,13 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - name: Check upload accelerator syntax
+      - name: Check resilient uploader syntax
         run: |
-          node --check public/upload-fast.js
-          node --check public/mobile-upload-recovery.js
-          node --check src/worker-fast.js
+          node --check public/upload-engine-v4.js
+          node --check src/worker-stability.js
       - name: Install smoke dependency
         run: python -m pip install --disable-pip-version-check requests
-      - name: Verify runtime and concurrent multipart upload
+      - name: Verify V4 runtime and concurrent multipart upload
         run: |
           python - <<'PY'
           import concurrent.futures
@@ -50,46 +49,46 @@ jobs:
 
           health = requests.get(base + '/api/health', timeout=30).json()
           assert health.get('ok') is True, health
-          assert health.get('uploadAcceleration') == 'parallel-multipart-v2', health
+          assert health.get('uploadAcceleration') == 'resilient-multipart-v4', health
+          assert int(health.get('uploadEngineVersion') or 0) == 4, health
           assert int(health.get('uploadConcurrencyMax') or 0) == 4, health
           assert health.get('uploadResume') is True, health
           assert health.get('videoAndSeparateAudioParallel') is True, health
           assert health.get('mobileForegroundRecovery') is True, health
-          assert health.get('mobileForegroundRecoveryVersion') == 'foreground-watchdog-v3', health
+          assert health.get('mobileForegroundRecoveryVersion') == 'adaptive-mobile-v4', health
           assert health.get('mobileBackgroundUpload') is True, health
-          assert health.get('mobileBackgroundUploadMode') == 'best-effort-v3', health
-          assert int(health.get('mobileForegroundStallMs') or 0) == 8000, health
-          assert int(health.get('mobileUploadHardTimeoutMs') or 0) == 120000, health
+          assert health.get('mobileBackgroundUploadMode') == 'best-effort-v4', health
+          assert int(health.get('mobileForegroundStallMs') or 0) == 18000, health
+          assert int(health.get('mobileReturnGraceMs') or 0) == 26000, health
+          assert int(health.get('mobileResponseStallMs') or 0) == 45000, health
+          assert int(health.get('mobileUploadHardTimeoutMs') or 0) == 180000, health
+          assert health.get('uploadServerReconcile') is True, health
+          assert int(health.get('uploadRetryAttempts') or 0) == 12, health
+          assert health.get('versionQueryRequired') is False, health
 
           html = requests.get(base + '/', timeout=30).text
-          assert 'upload-fast.js' in html, 'upload-fast V2 runtime asset missing from HTML'
-          assert 'mobile-upload-recovery.js' in html, 'foreground watchdog V3 runtime asset missing from HTML'
+          assert 'upload-engine-v4.js' in html, 'V4 upload engine missing from HTML'
           assert 'studio-v2.js' in html, 'Studio V2 runtime asset missing from HTML'
+          assert 'upload-fast.js' not in html, 'old V2 uploader must not be served'
+          assert 'mobile-upload-recovery.js' not in html, 'old V3 watchdog must not be served'
           assert not re.findall(r'(?:src|href)=["\'][^"\']+\?v=', html), 'versioned asset URLs must not be served'
 
-          asset = requests.get(base + '/upload-fast.js', timeout=30).text
+          asset = requests.get(base + '/upload-engine-v4.js', timeout=30).text
           for marker in (
-              'parallel-v2',
-              'parallelUpload',
-              'foreground-stall-watchdog-v3',
-              'FOREGROUND_STALL_MS = 8000',
-              'HARD_XHR_TIMEOUT_MS = 120000',
+              'resilient-multipart-v4',
+              'adaptive-mobile-v4',
+              'NORMAL_STALL_MS = 18000',
+              'RETURN_STALL_MS = 26000',
+              'RESPONSE_STALL_MS = 45000',
+              'MAX_ATTEMPTS = 12',
+              'reconcile(',
+              'findCompleted(',
           ):
-              assert marker in asset, f'missing upload accelerator marker: {marker}'
-          assert 'xhr.timeout = 300000' not in asset, 'old five-minute XHR timeout is still deployed'
-
-          recovery = requests.get(base + '/mobile-upload-recovery.js', timeout=30).text
-          for marker in (
-              'foreground-watchdog-v3',
-              'STALE_FOREGROUND_MS = 6500',
-              'MAX_PROBES = 8',
-              'recoverAfterForeground',
-              'meta.xhr.abort()',
-          ):
-              assert marker in recovery, f'missing foreground recovery marker: {marker}'
+              assert marker in asset, f'missing V4 marker: {marker}'
+          assert 'FOREGROUND_STALL_MS = 8000' not in asset, 'old aggressive 8s watchdog leaked into V4'
 
           started = requests.post(base + '/api/uploads/start', headers=headers, json={
-              'name': '__parallel_upload_smoke_v3__.bin',
+              'name': '__resilient_upload_smoke_v4__.bin',
               'size': 9 * 1024 * 1024,
               'type': 'application/octet-stream',
           }, timeout=30).json()
@@ -132,7 +131,7 @@ jobs:
               assert int(body.get('size') or 0) == total_size, body
 
               rate = uploaded / elapsed / (1024 * 1024)
-              print(f'FAST_UPLOAD_RUNTIME_V3_PASS parallel=2 bytes={uploaded} elapsed={elapsed:.2f}s rate={rate:.2f}MiB/s')
+              print(f'FAST_UPLOAD_RUNTIME_V4_PASS parallel=2 bytes={uploaded} elapsed={elapsed:.2f}s rate={rate:.2f}MiB/s')
           finally:
               deleted = requests.delete(base + '/api/files', headers=headers, params={'key': key}, timeout=30)
               if deleted.ok:
