@@ -4,6 +4,10 @@ on:
   workflow_run:
     workflows: ["Deploy Cloudflare Backend"]
     types: [completed]
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/r3-runtime-smoke.yml'
   workflow_dispatch:
 
 permissions:
@@ -11,16 +15,16 @@ permissions:
 
 jobs:
   smoke:
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main') }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main') }}
     runs-on: ubuntu-latest
     timeout-minutes: 6
     env:
       WORKER_URL: https://wuxia-ai-dubbing.26nak-testdev.workers.dev
     steps:
-      - name: Verify R3 health, UI injection and protected routes
+      - name: Verify R3 health, Studio V2 and protected routes
         run: |
           python - <<'PY'
-          import json, os, urllib.error, urllib.request
+          import json, os, re, urllib.error, urllib.request
           base = os.environ['WORKER_URL'].rstrip('/')
           ua = 'Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 Chrome/140.0 Mobile Safari/537.36'
 
@@ -50,12 +54,14 @@ jobs:
               assert health.get(key) is True, (key, health)
           print('R3 health + final gate contract: OK')
 
-          status, html = call('/?smoke=r3', expect_json=False)
+          status, html = call('/', expect_json=False)
           assert status == 200, status
-          assert 'r3-studio.js?v=r3-1' in html, 'missing R3 JS runtime injection'
-          assert 'r3-studio.css?v=r3-1' in html, 'missing R3 CSS runtime injection'
-          assert 'Smart Dubbing Studio R3' in html or 'r3-studio.js' in html
-          print('R3 UI injection: OK')
+          for marker in ('r3-studio.js', 'r3-studio.css', 'studio-v2.js', 'studio-v2.css', 'projectSlot', 'toastHost'):
+              assert marker in html, f'missing Studio V2 runtime marker: {marker}'
+          assert 'สร้างงานพากย์ไทย' in html, 'Studio V2 main workflow missing'
+          versioned_assets = re.findall(r'(?:src|href)=["\'][^"\']+\?v=', html)
+          assert not versioned_assets, f'version query parameters still served: {versioned_assets[:5]}'
+          print('R3 + Studio V2 clean asset URLs: OK')
 
           status, denied = call('/api/r3/batch', 'POST', {'items':[{'sourceUrl':'https://youtu.be/example'}]})
           assert status == 401, (status, denied)
@@ -69,5 +75,5 @@ jobs:
         run: |
           echo '### R3 runtime smoke passed' >> "$GITHUB_STEP_SUMMARY"
           echo '- R3 health and final Quality Gate flags live' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Smart Studio JS/CSS injected in Worker HTML' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Studio V2 assets and clean URLs verified in Worker HTML' >> "$GITHUB_STEP_SUMMARY"
           echo '- Batch, repair and final-complete routes protected' >> "$GITHUB_STEP_SUMMARY"
