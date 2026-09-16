@@ -2,7 +2,8 @@
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
   const ACCESS_KEY_SESSION = 'wuxia-access-key-v2';
-  const state = { health: null };
+  const PROJECT_LAST = 'wuxia-r3-project-last-v1';
+  const state = { health: null, saveTimer: 0 };
 
   function esc(value) {
     return String(value ?? '').replace(/[&<>\"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;' }[c] || c));
@@ -38,24 +39,75 @@
     };
   }
 
+  function projectSnapshot() {
+    return {
+      series: String($('#r3Series')?.value || '').trim().slice(0, 120),
+      season: Math.max(1, Number($('#r3Season')?.value || 1) || 1),
+      episode: Math.max(1, Number($('#r3Episode')?.value || 1) || 1),
+      glossaryText: String($('#r3Glossary')?.value || '').slice(0, 12000),
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  function saveProjectNow() {
+    try { localStorage.setItem(PROJECT_LAST, JSON.stringify(projectSnapshot())); } catch {}
+  }
+
+  function queueProjectSave() {
+    window.clearTimeout(state.saveTimer);
+    state.saveTimer = window.setTimeout(saveProjectNow, 180);
+  }
+
+  function restoreProject() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(PROJECT_LAST) || 'null');
+      if (!saved || typeof saved !== 'object') return;
+      if ($('#r3Series') && saved.series) $('#r3Series').value = String(saved.series).slice(0, 120);
+      if ($('#r3Season')) $('#r3Season').value = Math.max(1, Number(saved.season || 1) || 1);
+      if ($('#r3Episode')) $('#r3Episode').value = Math.max(1, Number(saved.episode || 1) || 1);
+      if ($('#r3Glossary') && saved.glossaryText) $('#r3Glossary').value = String(saved.glossaryText).slice(0, 12000);
+    } catch {}
+  }
+
+  function advanceEpisode(expectedEpisode) {
+    const field = $('#r3Episode');
+    if (!field) return;
+    const current = Math.max(1, Number(field.value || 1) || 1);
+    if (!Number.isFinite(Number(expectedEpisode)) || current === Number(expectedEpisode)) field.value = current + 1;
+    saveProjectNow();
+  }
+
   function installFetchBridge() {
     if (window.__WUXIA_R3_FETCH__) return;
     window.__WUXIA_R3_FETCH__ = true;
     const original = window.fetch.bind(window);
     window.fetch = async (input, init = {}) => {
+      let r3Job = false;
+      let submittedEpisode = null;
       try {
         const url = typeof input === 'string' ? input : String(input?.url || '');
         const method = String(init?.method || (typeof input !== 'string' ? input?.method : 'GET') || 'GET').toUpperCase();
         if (method === 'POST' && /\/api\/jobs(?:\?|$)/.test(url) && typeof init.body === 'string') {
           const body = JSON.parse(init.body);
           if (body && body.jobType !== 'transcript') {
-            init = { ...init, body: JSON.stringify({ ...body, ...r3Payload() }) };
+            const extra = r3Payload();
+            submittedEpisode = extra.episode;
+            init = { ...init, body: JSON.stringify({ ...body, ...extra }) };
+            r3Job = true;
+            saveProjectNow();
           }
         }
       } catch (err) {
         console.warn('R3 payload bridge skipped', err);
       }
-      return original(input, init);
+      const response = await original(input, init);
+      if (r3Job && response.ok) {
+        try {
+          const data = await response.clone().json();
+          if (data?.job?.id) advanceEpisode(submittedEpisode);
+        } catch {}
+      }
+      return response;
     };
   }
 
@@ -71,7 +123,7 @@
       <div class="r3-fields">
         <label><span>ชื่อเรื่อง / โปรเจกต์</span><input id="r3Series" maxlength="120" placeholder="เช่น เจ้าสำนักแห่งยุค" /></label>
         <label><span>Season</span><input id="r3Season" type="number" min="1" max="9999" value="1" /></label>
-        <label><span>EP</span><input id="r3Episode" type="number" min="1" max="9999" value="1" /></label>
+        <label><span>EP ถัดไป</span><input id="r3Episode" type="number" min="1" max="9999" value="1" /></label>
       </div>
       <label class="r3-glossary"><span>พจนานุกรมประจำเรื่อง <small>หนึ่งบรรทัดต่อหนึ่งคำ เช่น 宗主 = เจ้าสำนัก</small></span><textarea id="r3Glossary" rows="3" placeholder="宗主 = เจ้าสำนัก\n师尊 = ท่านอาจารย์"></textarea></label>
       <div class="r3-feature-grid">
@@ -83,6 +135,11 @@
         <div class="r3-batch-actions"><button type="button" id="r3BatchBtn" class="btn ghost">สร้าง Batch</button><span id="r3BatchStatus"></span></div>
       </details>`;
     optionGrid.insertAdjacentElement('afterend', panel);
+    restoreProject();
+    ['#r3Series', '#r3Season', '#r3Episode', '#r3Glossary'].forEach(selector => {
+      $(selector)?.addEventListener('input', queueProjectSave);
+      $(selector)?.addEventListener('change', queueProjectSave);
+    });
     $('#r3BatchBtn')?.addEventListener('click', createBatch);
   }
 
@@ -124,6 +181,8 @@
       if (status) status.textContent = 'กำลังสร้างงาน...';
       const data = await authedFetch('/api/r3/batch', { method: 'POST', body: JSON.stringify({ items }) });
       if (status) status.textContent = `สร้างแล้ว ${data.count || items.length} งาน`;
+      if ($('#r3Episode')) $('#r3Episode').value = startEp + (data.count || items.length);
+      saveProjectNow();
       $('#refreshBtn')?.click();
     } catch (err) {
       if (status) status.textContent = err.message;
@@ -188,7 +247,7 @@
       const r = await fetch('/api/health', { cache: 'no-store' });
       const data = await r.json();
       state.health = data;
-      if (!data.r3SmartStudio) throw new Error('R3 runtime ยังไม่พร้อม');
+      if (!data.r3SmartStudio || !data.finalQualityGate) throw new Error('R3 runtime ยังไม่พร้อมครบทุก gate');
       if (node) { node.textContent = 'R3 พร้อมใช้งาน'; node.classList.add('ready'); }
       document.documentElement.dataset.r3SmartStudio = 'ready';
     } catch (err) {
