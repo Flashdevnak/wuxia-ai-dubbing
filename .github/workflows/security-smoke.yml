@@ -32,6 +32,8 @@ jobs:
 
           base = os.environ['WORKER_URL'].rstrip('/')
           access = os.environ['ACCESS_KEY']
+          event_name = os.environ.get('GITHUB_EVENT_NAME', '')
+          strict_v2 = event_name in {'workflow_run', 'workflow_dispatch'}
           ua = 'Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 Chrome/140.0 Mobile Safari/537.36'
 
           def call(path, method='GET', payload=None, auth=False, expect_json=True, raw_body=None, extra_headers=None):
@@ -100,9 +102,20 @@ jobs:
           _, html_bytes = call('/?smoke=safety', expect_json=False)
           html = html_bytes.decode('utf-8', 'replace')
           assert 'safety.js?v=guard1' in html, 'safety.js was not injected into Worker HTML'
-          assert 'full-auto.js?v=full-auto1' in html, 'full-auto.js was not injected into Worker HTML'
-          assert 'full-auto.css?v=full-auto1' in html, 'full-auto.css was not injected into Worker HTML'
+          if strict_v2:
+              assert 'full-auto.js?v=full-auto2' in html, 'full-auto.js v2 was not injected into Worker HTML'
+              assert 'full-auto.css?v=full-auto2' in html, 'full-auto.css v2 was not injected into Worker HTML'
+          else:
+              assert 'full-auto.js?v=full-auto' in html and 'full-auto.css?v=full-auto' in html
           print('runtime safety + full-auto UI assets: OK')
+
+          if strict_v2:
+              _, ui_bytes = call('/full-auto.js?v=full-auto2', expect_json=False)
+              ui = ui_bytes.decode('utf-8', 'replace')
+              for marker in ('เลือกทางที่ใช้จริง', 'อัปโหลดไฟล์ — แนะนำ', 'YouTube โดยตรง — ทดลอง', 'Whisper'):
+                  assert marker in ui, f'missing clarified source marker: {marker}'
+              assert 'transcript-job' in ui and 'ใช้วิธีแนะนำ: เลือก MP4' in ui
+              print('clear production/upload vs experimental/YouTube UX: OK')
 
           payload = b'safety-r2-smoke!'
           _, started = call('/api/uploads/start', 'POST', {
@@ -152,7 +165,8 @@ jobs:
         run: |
           echo '### Worker safety smoke passed' >> "$GITHUB_STEP_SUMMARY"
           echo '- Safety + temporary R2 guards exposed by /api/health' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Runtime safety.js and full-auto UI injection present' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Runtime safety/full-auto asset injection present' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Post-deploy run verifies upload=recommended and YouTube=experimental UI v2' >> "$GITHUB_STEP_SUMMARY"
           echo '- Signed resumable upload IDs verified' >> "$GITHUB_STEP_SUMMARY"
           echo '- R2 multipart completion verified' >> "$GITHUB_STEP_SUMMARY"
           echo '- Short-lived secure download tickets verified' >> "$GITHUB_STEP_SUMMARY"
