@@ -151,8 +151,8 @@ jobs:
           assert health.get('temporaryStorage') is True, health
           assert health.get('voiceProfiles') is True, health
           assert health.get('hybridYoutubeTiming') is True, health
-          assert int(health.get('retentionMinutes') or 0) == 30, health
-          assert int(health.get('afterDownloadMinutes') or 0) == 10, health
+          assert int(health.get('retentionMinutes') or 0) == 1440, health
+          assert int(health.get('afterDownloadMinutes') or 0) == 1440, health
           assert health.get('uploadMode') == 'same-origin-multipart', health
           print('health cloudflare-r2-temp: OK')
 
@@ -251,4 +251,4 @@ jobs:
           echo '- Public multipart upload/resume/secure-download/delete passed' >> "$GITHUB_STEP_SUMMARY"
           echo '- Internal known-size and streaming R2 uploads passed' >> "$GITHUB_STEP_SUMMARY"
           echo '- Translation smoke test passed' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Temporary retention policy: 30 min / 10 min after download' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Temporary retention policy: 24 hours / 24 hours after download' >> "$GITHUB_STEP_SUMMARY"
