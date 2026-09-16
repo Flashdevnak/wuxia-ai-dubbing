@@ -5,6 +5,7 @@ on:
     paths:
       - 'scripts/dub_chunk.py'
       - 'scripts/dub_guard.py'
+      - 'scripts/voice_profiles.py'
       - 'requirements.txt'
       - '.github/workflows/dubbing.yml'
       - '.github/workflows/thai-media-smoke.yml'
@@ -34,34 +35,35 @@ jobs:
       - name: Install lightweight TTS smoke dependencies
         run: python -m pip install --disable-pip-version-check "edge-tts>=7.2.0,<8"
 
-      - name: Generate real Thai TTS sample
+      - name: Generate real Thai voice-profile samples
         run: |
           python - <<'PY'
           import asyncio
+          import sys
           from pathlib import Path
-          import edge_tts
+          sys.path.insert(0, 'scripts')
+          from voice_profiles import list_profile_voices, synthesize_profile, decode_profile
+
+          LOCALES = {'th': 'th-TH'}
 
           async def main():
-              voices = await edge_tts.list_voices()
-              thai = [v for v in voices if str(v.get('Locale', '')).lower() == 'th-th']
-              if not thai:
-                  raise SystemExit('No th-TH Edge TTS voice available')
-              voice = str(thai[0]['ShortName'])
-              print('Thai voice:', voice)
-              last = None
-              for attempt in range(1, 4):
-                  try:
-                      await edge_tts.Communicate(
-                          text='ทดสอบระบบพากย์ไทย เสียง ภาพ และคำบรรยายทำงานครบ',
-                          voice=voice,
-                          rate='-5%',
-                      ).save('thai-smoke.mp3')
-                      if Path('thai-smoke.mp3').stat().st_size > 0:
-                          return
-                  except Exception as exc:
-                      last = exc
-                      await asyncio.sleep(attempt)
-              raise RuntimeError(f'Edge TTS smoke failed: {last}')
+              wanted = ['child-girl', 'teen-boy', 'adult-female', 'elder-male', 'narrator']
+              for profile_name in wanted:
+                  voices = await list_profile_voices('th', profile_name, LOCALES)
+                  if not voices:
+                      raise RuntimeError(f'No profile voice: {profile_name}')
+                  profile = decode_profile(voices[0])
+                  if not profile or not profile.get('voice'):
+                      raise RuntimeError(f'Invalid profile encoding: {profile_name}')
+                  print(profile_name, profile)
+                  out = Path(f'{profile_name}.mp3')
+                  await synthesize_profile(
+                      'ทดสอบระบบพากย์ไทยหลายช่วงวัย เสียงชัดเจนและทำงานอัตโนมัติ',
+                      voices[0],
+                      out,
+                  )
+                  if not out.exists() or out.stat().st_size <= 0:
+                      raise RuntimeError(f'Empty TTS output: {profile_name}')
 
           asyncio.run(main())
           PY
@@ -77,7 +79,7 @@ jobs:
           ffmpeg -hide_banner -loglevel error -y \
             -f lavfi -i "color=c=black:s=640x360:r=30:d=5" \
             -f lavfi -i "sine=frequency=220:sample_rate=48000:duration=5" \
-            -i thai-smoke.mp3 \
+            -i adult-female.mp3 \
             -filter_complex "[1:a]volume=0.12[bg];[2:a]aresample=48000,loudnorm=I=-16:TP=-1.5:LRA=7[voice];[bg][voice]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95[aout]" \
             -map 0:v:0 -map '[aout]' \
             -vf "subtitles=thai-smoke.srt:force_style='FontName=Noto Sans Thai,FontSize=28,Alignment=2,MarginV=36,BorderStyle=3,Outline=1,Shadow=0'" \
