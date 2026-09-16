@@ -1,0 +1,13 @@
+name: R2 Runtime Smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo 'Use Deploy Cloudflare Backend runtime smoke for production verification.'
