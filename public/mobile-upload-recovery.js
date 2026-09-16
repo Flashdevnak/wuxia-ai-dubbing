@@ -4,6 +4,7 @@
   let hiddenAt = 0;
   let recoveryTimer = null;
   let returnSeq = 0;
+  let backgroundProgressSeen = false;
 
   const originalOpen = XMLHttpRequest.prototype.open;
   const originalSend = XMLHttpRequest.prototype.send;
@@ -20,22 +21,16 @@
     for (const node of [video, audio]) {
       if (!node) continue;
       const current = String(node.textContent || '');
-      if (/อัปโหลด|กำลังส่ง|ช่องทาง|ทำต่อ|หยุดชั่วคราว|กลับมาทำต่อ/.test(current)) node.textContent = text;
+      if (/อัปโหลด|กำลังส่ง|ช่องทาง|ทำต่อ|หยุดชั่วคราว|กลับมาทำต่อ|เบื้องหลัง|Android/.test(current)) {
+        node.textContent = text;
+      }
     }
   }
 
-  function waitUntilVisible(send) {
-    if (!document.hidden) { send(); return; }
-    const run = () => {
-      if (document.hidden) return;
-      document.removeEventListener('visibilitychange', run);
-      window.removeEventListener('pageshow', run);
-      window.removeEventListener('focus', run);
-      send();
-    };
-    document.addEventListener('visibilitychange', run);
-    window.addEventListener('pageshow', run);
-    window.addEventListener('focus', run);
+  function markBackgroundProgress() {
+    if (!document.hidden) return;
+    backgroundProgressSeen = true;
+    updateStatus('กำลังอัปโหลดเบื้องหลัง · ส่งข้อมูลต่อได้ในขณะนี้');
   }
 
   XMLHttpRequest.prototype.open = function(method, url, ...rest) {
@@ -48,65 +43,93 @@
 
     const xhr = this;
     const id = Symbol('upload-xhr');
-    const meta = { xhr, id, startedAt: 0, lastProgressAt: now(), settled: false, delayed: false };
+    const meta = {
+      xhr,
+      id,
+      startedAt: now(),
+      lastProgressAt: now(),
+      settled: false,
+      hiddenProgress: false,
+    };
     active.set(id, meta);
 
     const settle = () => {
       meta.settled = true;
       active.delete(id);
     };
+
     xhr.addEventListener('loadend', settle, { once: true });
-    xhr.upload?.addEventListener('progress', () => { meta.lastProgressAt = now(); });
-
-    const actualSend = () => {
-      if (meta.settled) return;
-      meta.delayed = false;
-      meta.startedAt = now();
+    xhr.upload?.addEventListener('progress', () => {
       meta.lastProgressAt = now();
-      originalSend.call(xhr, body);
-    };
+      if (document.hidden) {
+        meta.hiddenProgress = true;
+        markBackgroundProgress();
+      }
+    });
 
-    if (document.hidden) {
-      meta.delayed = true;
-      updateStatus('พักการส่งชั่วคราว เพราะหน้าเว็บอยู่เบื้องหลัง · จะทำต่ออัตโนมัติเมื่อกลับมา');
-      waitUntilVisible(actualSend);
-      return;
-    }
-    actualSend();
+    // Background Upload V2: do not intentionally pause new multipart requests
+    // when the tab is hidden. Android/Chrome may still freeze the process at OS level,
+    // but while the browser grants network time the upload continues normally.
+    originalSend.call(xhr, body);
   };
 
-  function recoverForeground() {
+  function recoverAfterForeground() {
     const seq = ++returnSeq;
     clearTimeout(recoveryTimer);
     recoveryTimer = setTimeout(() => {
       if (seq !== returnSeq || document.hidden) return;
-      const cutoff = now() - 1800;
+
+      const staleBefore = now() - 8000;
       let aborted = 0;
+      let healthy = 0;
+
       for (const meta of active.values()) {
-        if (meta.settled || meta.delayed) continue;
-        if (meta.lastProgressAt <= cutoff || (hiddenAt && meta.startedAt && meta.startedAt <= hiddenAt)) {
+        if (meta.settled) continue;
+        if (meta.lastProgressAt <= staleBefore) {
           try {
             meta.xhr.abort();
             aborted += 1;
           } catch {}
+        } else {
+          healthy += 1;
         }
       }
+
       hiddenAt = 0;
-      if (aborted) updateStatus('กลับมาหน้าเว็บแล้ว · กำลังเชื่อมต่อและทำต่อจากส่วนที่อัปโหลดไว้');
-    }, 2200);
+      if (aborted) {
+        updateStatus('กลับมาหน้าเว็บแล้ว · กำลังเชื่อมต่อใหม่เฉพาะส่วนที่ Android พักไว้');
+      } else if (healthy || backgroundProgressSeen) {
+        updateStatus('กลับมาหน้าเว็บแล้ว · การอัปโหลดยังทำงานต่อเนื่อง');
+      }
+      backgroundProgressSeen = false;
+    }, 2500);
   }
 
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       hiddenAt = now();
-      updateStatus('ออกจากหน้าเว็บชั่วคราว · ระบบจะจำส่วนที่ส่งแล้วและทำต่อเมื่อกลับมา');
+      backgroundProgressSeen = false;
+      updateStatus('กำลังพยายามอัปโหลดเบื้องหลัง · Android อาจพักเครือข่ายชั่วคราว แต่ส่วนที่ส่งสำเร็จจะไม่หาย');
       return;
     }
-    recoverForeground();
+    recoverAfterForeground();
   });
 
-  window.addEventListener('pageshow', recoverForeground);
-  window.addEventListener('focus', () => { if (!document.hidden) recoverForeground(); });
+  window.addEventListener('pageshow', recoverAfterForeground);
+  window.addEventListener('focus', () => {
+    if (!document.hidden) recoverAfterForeground();
+  });
+  window.addEventListener('online', () => {
+    if (!document.hidden) recoverAfterForeground();
+  });
 
-  document.documentElement.dataset.mobileUploadRecovery = 'foreground-resume-v1';
+  // Ask the browser to keep site storage durable when supported. This protects
+  // multipart resume metadata from normal storage eviction; it does not bypass
+  // Android process suspension.
+  try {
+    if (navigator.storage?.persist) navigator.storage.persist().catch(() => {});
+  } catch {}
+
+  document.documentElement.dataset.mobileUploadRecovery = 'background-best-effort-v2';
+  document.documentElement.dataset.mobileBackgroundUpload = 'best-effort-v2';
 })();
