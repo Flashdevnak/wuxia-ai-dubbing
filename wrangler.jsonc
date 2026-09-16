@@ -24,9 +24,9 @@
     "APP_NAME": "ยุทธภพ AI Dubbing",
     "GITHUB_REPO": "Flashdevnak/wuxia-ai-dubbing",
     "TRANSLATE_MODEL": "@cf/meta/llama-3.1-8b-instruct-fast",
-    "TEMP_RETENTION_MINUTES": "30",
-    "AFTER_DOWNLOAD_RETENTION_MINUTES": "10",
-    "TEMP_STORAGE_BUDGET_GB": "5",
+    "TEMP_RETENTION_MINUTES": "1440",
+    "AFTER_DOWNLOAD_RETENTION_MINUTES": "1440",
+    "TEMP_STORAGE_BUDGET_GB": "8",
     "R3_SMART_DUBBING": "1"
   }
 }
