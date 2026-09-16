@@ -27,6 +27,7 @@ jobs:
       - name: Check upload accelerator syntax
         run: |
           node --check public/upload-fast.js
+          node --check public/mobile-upload-recovery.js
           node --check src/worker-fast.js
       - name: Install smoke dependency
         run: python -m pip install --disable-pip-version-check requests
@@ -44,21 +45,43 @@ jobs:
 
           health = requests.get(base + '/api/health', timeout=30).json()
           assert health.get('ok') is True, health
-          assert health.get('uploadAcceleration') == 'parallel-multipart-v1', health
+          assert health.get('uploadAcceleration') == 'parallel-multipart-v2', health
           assert int(health.get('uploadConcurrencyMax') or 0) == 4, health
           assert health.get('uploadResume') is True, health
           assert health.get('videoAndSeparateAudioParallel') is True, health
+          assert health.get('mobileForegroundRecovery') is True, health
+          assert health.get('mobileForegroundRecoveryVersion') == 'foreground-watchdog-v3', health
+          assert health.get('mobileBackgroundUpload') is True, health
+          assert health.get('mobileBackgroundUploadMode') == 'best-effort-v3', health
+          assert int(health.get('mobileForegroundStallMs') or 0) == 8000, health
+          assert int(health.get('mobileUploadHardTimeoutMs') or 0) == 120000, health
 
-          html = requests.get(base + '/?v=parallel1', timeout=30).text
-          assert 'upload-fast.js?v=parallel1' in html, 'upload-fast runtime asset missing from HTML'
-          asset = requests.get(base + '/upload-fast.js?v=parallel1', timeout=30).text
-          for marker in ('parallel-v1', 'parallelUpload', 'videoAndSeparateAudioParallel'):
-              if marker == 'videoAndSeparateAudioParallel':
-                  continue
+          html = requests.get(base + '/?v=foreground3', timeout=30).text
+          assert 'upload-fast.js?v=parallel2' in html, 'upload-fast V2 runtime asset missing from HTML'
+          assert 'mobile-upload-recovery.js?v=foreground3' in html, 'foreground watchdog V3 runtime asset missing from HTML'
+
+          asset = requests.get(base + '/upload-fast.js?v=parallel2', timeout=30).text
+          for marker in (
+              'parallel-v2',
+              'parallelUpload',
+              'foreground-stall-watchdog-v3',
+              'FOREGROUND_STALL_MS = 8000',
+              'HARD_XHR_TIMEOUT_MS = 120000',
+          ):
               assert marker in asset, f'missing upload accelerator marker: {marker}'
+          assert 'xhr.timeout = 300000' not in asset, 'old five-minute XHR timeout is still deployed'
+
+          recovery = requests.get(base + '/mobile-upload-recovery.js?v=foreground3', timeout=30).text
+          for marker in (
+              'foreground-watchdog-v3',
+              'STALE_FOREGROUND_MS = 6500',
+              'MAX_PROBES = 8',
+              'เชื่อมต่อใหม่เฉพาะส่วนที่ค้างทันที',
+          ):
+              assert marker in recovery, f'missing foreground recovery marker: {marker}'
 
           started = requests.post(base + '/api/uploads/start', headers=headers, json={
-              'name': '__parallel_upload_smoke__.bin',
+              'name': '__parallel_upload_smoke_v3__.bin',
               'size': 9 * 1024 * 1024,
               'type': 'application/octet-stream',
           }, timeout=30).json()
@@ -85,24 +108,25 @@ jobs:
               assert int(body.get('partNumber') or 0) == part_number, body
               return len(payload)
 
-          t0 = time.time()
-          with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-              uploaded = sum(pool.map(send, chunks))
-          elapsed = max(0.001, time.time() - t0)
-          assert uploaded == total_size, uploaded
+          try:
+              t0 = time.time()
+              with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                  uploaded = sum(pool.map(send, chunks))
+              elapsed = max(0.001, time.time() - t0)
+              assert uploaded == total_size, uploaded
 
-          done = requests.post(base + '/api/uploads/complete', headers=headers, json={
-              'key': key,
-              'uploadId': upload_id,
-          }, timeout=60)
-          done.raise_for_status()
-          body = done.json()
-          assert int(body.get('size') or 0) == total_size, body
+              done = requests.post(base + '/api/uploads/complete', headers=headers, json={
+                  'key': key,
+                  'uploadId': upload_id,
+              }, timeout=60)
+              done.raise_for_status()
+              body = done.json()
+              assert int(body.get('size') or 0) == total_size, body
 
-          deleted = requests.delete(base + '/api/files', headers=headers, params={'key': key}, timeout=30)
-          deleted.raise_for_status()
-          assert deleted.json().get('ok') is True
-
-          rate = uploaded / elapsed / (1024 * 1024)
-          print(f'FAST_UPLOAD_RUNTIME_PASS parallel=2 bytes={uploaded} elapsed={elapsed:.2f}s rate={rate:.2f}MiB/s')
+              rate = uploaded / elapsed / (1024 * 1024)
+              print(f'FAST_UPLOAD_RUNTIME_V3_PASS parallel=2 bytes={uploaded} elapsed={elapsed:.2f}s rate={rate:.2f}MiB/s')
+          finally:
+              deleted = requests.delete(base + '/api/files', headers=headers, params={'key': key}, timeout=30)
+              if deleted.ok:
+                  assert deleted.json().get('ok') is True
           PY
