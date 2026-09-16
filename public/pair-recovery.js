@@ -122,7 +122,7 @@
 
     if (!audio) {
       audio = uploads.find(file => file.key !== video?.key && AUDIO_EXCLUSIVE.has(extOf(baseName(file.key))) && recentEnough(file))
-        || uploads.find(file => file.key !== video?.key && AUDIO_EXCLUSIVE.has(extOf(baseName(file.key)))
+        || uploads.find(file => file.key !== video?.key && AUDIO_EXCLUSIVE.has(extOf(baseName(file.key))))
         || null;
     }
 
