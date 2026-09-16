@@ -6,6 +6,7 @@ on:
       - 'src/storage.js'
       - 'src/worker-full.js'
       - 'src/worker-safe.js'
+      - 'src/worker-pairfix.js'
       - 'wrangler.jsonc'
       - '.github/workflows/local-r2-smoke.yml'
   push:
@@ -14,6 +15,7 @@ on:
       - 'src/storage.js'
       - 'src/worker-full.js'
       - 'src/worker-safe.js'
+      - 'src/worker-pairfix.js'
       - 'wrangler.jsonc'
       - '.github/workflows/local-r2-smoke.yml'
 
@@ -63,6 +65,8 @@ jobs:
           assert health.get('storageReady') is True, health
           assert health.get('backend') == 'cloudflare-r2-temp', health
           assert health.get('temporaryStorage') is True, health
+          assert health.get('storageCleanup') is True, health
+          assert health.get('workspacePurge') is True, health
 
           part = 8 * 1024 * 1024
           source = (b'A' * part) + (b'B' * (4 * 1024 * 1024 + 321))
@@ -127,6 +131,68 @@ jobs:
           deleted.raise_for_status()
           assert int(deleted.json().get('freedBytes') or 0) == len(source), deleted.text
           print('LOCAL_R2_MULTIPART_SMOKE=PASS')
+          PY
+      - name: Verify cleanup all removes paused job and linked separate audio
+        run: |
+          python - <<'PY'
+          import requests
+
+          base = 'http://127.0.0.1:8787'
+          public = {'x-access-key': 'local-test-access'}
+          worker = {'x-worker-token': 'local-test-worker'}
+
+          def upload(name, payload):
+              started = requests.post(base + '/api/uploads/start', headers=public, json={
+                  'name': name, 'size': len(payload), 'type': 'application/octet-stream',
+              }, timeout=30)
+              started.raise_for_status()
+              state = started.json()
+              part = requests.post(base + '/api/uploads/chunk', headers=public,
+                  data={'key': state['key'], 'uploadId': state['uploadId'], 'partNumber': '1'},
+                  files={'chunk': (name, payload, 'application/octet-stream')}, timeout=30)
+              part.raise_for_status()
+              done = requests.post(base + '/api/uploads/complete', headers=public,
+                  json={'key': state['key'], 'uploadId': state['uploadId']}, timeout=30)
+              done.raise_for_status()
+              return state['key']
+
+          video = upload('cleanup-video.bin', b'video-cleanup-test')
+          audio = upload('cleanup-audio.bin', b'audio-cleanup-test')
+
+          created = requests.post(base + '/api/jobs', headers=public, json={
+              'jobType': 'dubbing', 'sourceType': 'upload', 'sourceKey': video,
+              'sourceLang': 'auto', 'targetLang': 'th', 'title': 'cleanup smoke',
+          }, timeout=30)
+          created.raise_for_status()
+          job_id = created.json()['job']['id']
+
+          attached = requests.post(base + f'/api/pair/jobs/{job_id}/attach-audio', headers=public,
+              json={'sourceAudioKey': audio, 'sourceAudioName': 'cleanup-audio.bin', 'retry': False}, timeout=30)
+          attached.raise_for_status()
+          assert attached.json().get('attached') is True, attached.text
+
+          paused = requests.patch(base + f'/api/internal/jobs/{job_id}', headers=worker,
+              json={'status': 'paused', 'stage': 'paused cleanup smoke'}, timeout=30)
+          paused.raise_for_status()
+          assert paused.json()['job']['status'] == 'paused', paused.text
+
+          before = requests.get(base + '/api/storage', headers=public, timeout=30)
+          before.raise_for_status()
+          assert int(before.json().get('bytes') or 0) > 0, before.text
+
+          cleaned = requests.post(base + '/api/cleanup/all', headers=public, json={}, timeout=60)
+          cleaned.raise_for_status()
+          body = cleaned.json()
+          assert body.get('ok') is True and body.get('workspacePurged') is True, body
+          assert int(body.get('remaining') or 0) == 0, body
+
+          after = requests.get(base + '/api/storage', headers=public, timeout=30)
+          after.raise_for_status()
+          assert int(after.json().get('bytes', -1)) == 0, after.text
+          jobs = requests.get(base + '/api/jobs', headers=public, timeout=30)
+          jobs.raise_for_status()
+          assert jobs.json().get('jobs') == [], jobs.text
+          print('LOCAL_R2_WORKSPACE_PURGE_SMOKE=PASS')
           PY
       - name: Print local Worker log on failure
         if: failure()

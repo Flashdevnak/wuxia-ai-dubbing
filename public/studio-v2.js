@@ -80,6 +80,22 @@
     }
   }
 
+  function mountDlbunnyHelper() {
+    const card = $('.media-card');
+    const sourceBox = $('.source-box', card || document);
+    if (!card || !sourceBox || $('#dlbunnyShortcut')) return Boolean(card && sourceBox);
+    const shortcut = document.createElement('a');
+    shortcut.id = 'dlbunnyShortcut';
+    shortcut.className = 'source-card secondary-source';
+    shortcut.href = 'https://dlbunny.com/en/youtube';
+    shortcut.target = '_blank';
+    shortcut.rel = 'noopener noreferrer';
+    shortcut.style.textDecoration = 'none';
+    shortcut.innerHTML = '<div><b>ดาวน์โหลดวิดีโอหรือเสียงจาก YouTube</b><small>เปิด DLBunny แล้วดาวน์โหลดไฟล์ จากนั้นกลับมาอัปโหลดในหน้านี้</small></div><span class="source-tag">DLBunny</span>';
+    sourceBox.insertAdjacentElement('beforebegin', shortcut);
+    return true;
+  }
+
   function phaseIndex(percent, card) {
     if (card.classList.contains('completed') || percent >= 100) return 6;
     const stage = safeText($('.job-stage', card)?.textContent).toLowerCase();
@@ -145,6 +161,7 @@
       requestAnimationFrame(() => {
         try {
           relocateProjectPanel();
+          mountDlbunnyHelper();
           decorateAllJobs();
         } finally { state.busy = false; }
       });
@@ -234,9 +251,10 @@
     installProjectFreshStart();
     setDefaultMode();
     relocateProjectPanel();
+    mountDlbunnyHelper();
     decorateAllJobs();
     updateStaticWords();
-    window.setTimeout(() => { relocateProjectPanel(); decorateAllJobs(); updateStaticWords(); }, 400);
+    window.setTimeout(() => { relocateProjectPanel(); mountDlbunnyHelper(); decorateAllJobs(); updateStaticWords(); }, 400);
     document.documentElement.dataset.studio = 'v2';
   }
 
