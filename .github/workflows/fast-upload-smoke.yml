@@ -80,7 +80,8 @@ jobs:
               'foreground-watchdog-v3',
               'STALE_FOREGROUND_MS = 6500',
               'MAX_PROBES = 8',
-              'เชื่อมต่อใหม่เฉพาะส่วนที่ค้างทันที',
+              'recoverAfterForeground',
+              'meta.xhr.abort()',
           ):
               assert marker in recovery, f'missing foreground recovery marker: {marker}'
 
