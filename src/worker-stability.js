@@ -1,5 +1,8 @@
 import pairWorker from './worker-pairfix.js';
 
+// Retired runtime assets: upload-fast.js and mobile-upload-recovery.js.
+// They remain in repository history for rollback, but are removed from served HTML.
+
 function withNoStore(response) {
   if (!response) return response;
   const headers = new Headers(response.headers);
@@ -53,8 +56,7 @@ async function rewriteHtml(response) {
     .replace(/\s*<script[^>]+src=["'][^"']*upload-fast\.js(?:\?[^"']*)?["'][^>]*><\/script>/gi, '')
     .replace(/\s*<script[^>]+src=["'][^"']*mobile-upload-recovery\.js(?:\?[^"']*)?["'][^>]*><\/script>/gi, '');
 
-  // Never require ?v= cache-busting URLs. The Worker serves HTML and critical
-  // Studio assets with no-store headers instead.
+  // Never require cache-busting query parameters. Critical assets are no-store.
   html = html.replace(/((?:src|href)=["'][^"']+\.(?:js|css))\?v=[^"']+(["'])/gi, '$1$2');
 
   if (!html.includes('upload-engine-v4.js')) {
