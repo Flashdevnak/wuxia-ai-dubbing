@@ -1,0 +1,57 @@
+name: Storage Efficiency Acceptance
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/prepare_job_full.py'
+      - 'src/worker-stability.js'
+      - '.github/workflows/storage-efficiency.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/prepare_job_full.py'
+      - 'src/worker-stability.js'
+      - '.github/workflows/storage-efficiency.yml'
+  workflow_dispatch:
+
+jobs:
+  storage-efficiency:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Syntax checks
+        run: |
+          python -m py_compile scripts/prepare_job_full.py
+          node --check src/worker-stability.js
+
+      - name: Direct separate-audio storage contract
+        run: |
+          grep -q 'DIRECT_PAIR_MODE = "direct-separate-audio-v1"' scripts/prepare_job_full.py
+          grep -q 'STORAGE_EFFICIENT_DIRECT_PAIR_PASS' scripts/prepare_job_full.py
+          grep -q 'do not create temp/{job}/paired_source.mkv' scripts/prepare_job_full.py
+          if grep -q 'mux_separate_audio' scripts/prepare_job_full.py; then
+            echo 'prepare_job_full.py still imports or calls full-file muxing' >&2
+            exit 1
+          fi
+          if grep -q 'client.upload(paired_local' scripts/prepare_job_full.py; then
+            echo 'prepare_job_full.py still uploads a full paired media copy' >&2
+            exit 1
+          fi
+
+      - name: Active compaction contract
+        run: |
+          grep -q "active-storage-compaction" src/worker-stability.js
+          grep -q "completed-source-release" src/worker-stability.js
+          grep -q "releaseCompletedSourceChunks: true" src/worker-stability.js
+          grep -q "releaseOriginalsAfterCompletion: true" src/worker-stability.js
+          grep -q 'temp/${jobId}/paired_source.mkv' src/worker-stability.js
+          grep -q 'temp/${jobId}/source/chunk_${n}.mkv' src/worker-stability.js
+          grep -q 'temp/${jobId}/transcript/chunk_${n}.json' src/worker-stability.js
+          echo 'STORAGE_EFFICIENCY_ACCEPTANCE_PASS'
