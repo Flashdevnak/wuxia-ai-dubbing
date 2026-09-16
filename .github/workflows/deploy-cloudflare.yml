@@ -35,25 +35,31 @@ jobs:
           ACCESS_KEY: ${{ secrets.WUXIA_ACCESS_KEY }}
           WORKER_TOKEN: ${{ secrets.WORKER_SHARED_TOKEN }}
           DISPATCH_TOKEN: ${{ secrets.GH_DISPATCH_TOKEN }}
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
         run: |
           test -n "$CLOUDFLARE_API_TOKEN" || (echo 'Missing CLOUDFLARE_API_TOKEN' && exit 1)
           test -n "$CLOUDFLARE_ACCOUNT_ID" || (echo 'Missing CLOUDFLARE_ACCOUNT_ID' && exit 1)
           test -n "$ACCESS_KEY" || (echo 'Missing WUXIA_ACCESS_KEY' && exit 1)
           test -n "$WORKER_TOKEN" || (echo 'Missing WORKER_SHARED_TOKEN' && exit 1)
           test -n "$DISPATCH_TOKEN" || (echo 'Missing GH_DISPATCH_TOKEN' && exit 1)
-          test -n "$GOOGLE_CLIENT_ID" || (echo 'Missing GOOGLE_CLIENT_ID' && exit 1)
-          test -n "$GOOGLE_CLIENT_SECRET" || (echo 'Missing GOOGLE_CLIENT_SECRET' && exit 1)
-          test -n "$GOOGLE_REFRESH_TOKEN" || (echo 'Missing GOOGLE_REFRESH_TOKEN' && exit 1)
 
       - name: Validate JavaScript and Python syntax
         run: |
           node --check public/app.js
+          node --check public/safety.js
+          node --check public/full-auto.js
           node --check src/worker.js
+          node --check src/worker-safe.js
+          node --check src/worker-full.js
           node --check src/storage.js
-          python -m py_compile scripts/dub_chunk.py scripts/prepare_job.py scripts/finalize_job.py scripts/worker_client.py
+          node --check src/youtube.js
+          python -m py_compile \
+            scripts/dub_chunk.py \
+            scripts/dub_guard.py \
+            scripts/prepare_job.py \
+            scripts/prepare_job_full.py \
+            scripts/voice_profiles.py \
+            scripts/finalize_job.py \
+            scripts/worker_client.py
 
       - name: Install Wrangler
         run: npm install
@@ -66,25 +72,19 @@ jobs:
           ACCESS_KEY: ${{ secrets.WUXIA_ACCESS_KEY }}
           WORKER_TOKEN: ${{ secrets.WORKER_SHARED_TOKEN }}
           DISPATCH_TOKEN: ${{ secrets.GH_DISPATCH_TOKEN }}
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
         run: |
           printf '%s' "$ACCESS_KEY" | npx wrangler secret put ACCESS_KEY
           printf '%s' "$WORKER_TOKEN" | npx wrangler secret put WORKER_SHARED_TOKEN
           printf '%s' "$DISPATCH_TOKEN" | npx wrangler secret put GITHUB_TOKEN
-          printf '%s' "$GOOGLE_CLIENT_ID" | npx wrangler secret put GOOGLE_CLIENT_ID
-          printf '%s' "$GOOGLE_CLIENT_SECRET" | npx wrangler secret put GOOGLE_CLIENT_SECRET
-          printf '%s' "$GOOGLE_REFRESH_TOKEN" | npx wrangler secret put GOOGLE_REFRESH_TOKEN
 
-      - name: Smoke test storage uploads and translation
+      - name: Smoke test temporary R2 storage and translation
         env:
           ACCESS_KEY: ${{ secrets.WUXIA_ACCESS_KEY }}
           WORKER_TOKEN: ${{ secrets.WORKER_SHARED_TOKEN }}
           WORKER_URL: https://wuxia-ai-dubbing.26nak-testdev.workers.dev
         run: |
           python - <<'PY'
-          import io, json, os, urllib.parse, urllib.request, urllib.error, uuid
+          import hashlib, io, json, math, os, urllib.parse, urllib.request, urllib.error, uuid
 
           base = os.environ['WORKER_URL'].rstrip('/')
           access = os.environ['ACCESS_KEY']
@@ -108,13 +108,15 @@ jobs:
           def public_json(path, method='GET', payload=None):
               body = None if payload is None else json.dumps(payload).encode()
               headers = {'x-access-key': access, 'Accept': 'application/json'}
-              if body is not None: headers['content-type'] = 'application/json'
+              if body is not None:
+                  headers['content-type'] = 'application/json'
               return request(path, method, body, headers)[2]
 
           def internal_json(path, method='GET', payload=None):
               body = None if payload is None else json.dumps(payload).encode()
               headers = {'x-worker-token': worker_token, 'Accept': 'application/json'}
-              if body is not None: headers['content-type'] = 'application/json'
+              if body is not None:
+                  headers['content-type'] = 'application/json'
               return request(path, method, body, headers)[2]
 
           def multipart_chunk(key, upload_id, part_number, chunk):
@@ -123,74 +125,130 @@ jobs:
               def field(name, value):
                   buf.write(f'--{boundary}\r\n'.encode())
                   buf.write(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode())
-                  buf.write(str(value).encode()); buf.write(b'\r\n')
-              field('key', key); field('uploadId', upload_id); field('partNumber', part_number)
+                  buf.write(str(value).encode())
+                  buf.write(b'\r\n')
+              field('key', key)
+              field('uploadId', upload_id)
+              field('partNumber', part_number)
               buf.write(f'--{boundary}\r\n'.encode())
               buf.write(b'Content-Disposition: form-data; name="chunk"; filename="chunk.bin"\r\n')
-              buf.write(b'Content-Type: application/octet-stream\r\n\r\n'); buf.write(chunk); buf.write(b'\r\n')
+              buf.write(b'Content-Type: application/octet-stream\r\n\r\n')
+              buf.write(chunk)
+              buf.write(b'\r\n')
               buf.write(f'--{boundary}--\r\n'.encode())
               body = buf.getvalue()
-              headers = {'x-access-key': access, 'content-type': f'multipart/form-data; boundary={boundary}', 'content-length': str(len(body)), 'Accept': 'application/json'}
+              headers = {
+                  'x-access-key': access,
+                  'content-type': f'multipart/form-data; boundary={boundary}',
+                  'content-length': str(len(body)),
+                  'Accept': 'application/json',
+              }
               return request('/api/uploads/chunk', 'POST', body, headers)[2]
 
           health = request('/api/health')[2]
-          assert health.get('driveReady'), health
-          assert health.get('core') == 'clean-v2.3', health
+          assert health.get('storageReady') is True, health
+          assert health.get('backend') == 'cloudflare-r2-temp', health
+          assert health.get('temporaryStorage') is True, health
+          assert health.get('voiceProfiles') is True, health
+          assert health.get('hybridYoutubeTiming') is True, health
+          assert int(health.get('retentionMinutes') or 0) == 30, health
+          assert int(health.get('afterDownloadMinutes') or 0) == 10, health
           assert health.get('uploadMode') == 'same-origin-multipart', health
-          print('health clean-v2.3: OK')
+          print('health cloudflare-r2-temp: OK')
 
-          translated = internal_json('/api/internal/translate', 'POST', {'texts': ['Hello, welcome.'], 'sourceLang': 'en', 'targetLang': 'th'})
+          translated = internal_json('/api/internal/translate', 'POST', {
+              'texts': ['Hello, welcome.'],
+              'sourceLang': 'en',
+              'targetLang': 'th',
+          })
           assert len(translated.get('translations') or []) == 1, translated
           assert str(translated['translations'][0]).strip(), translated
           print('translation: OK')
 
-          part_size = 2 * 1024 * 1024
-          source = b'A' * part_size + b'B' * part_size + b'C' * (1024 * 1024)
-          started = public_json('/api/uploads/start', 'POST', {'name': '__core22_public_smoke__.bin', 'size': len(source), 'type': 'application/octet-stream'})
-          assert int(started['partSize']) == part_size, started
+          total_size = 17 * 1024 * 1024 + 123
+          started = public_json('/api/uploads/start', 'POST', {
+              'name': '__r2_public_smoke__.bin',
+              'size': total_size,
+              'type': 'application/octet-stream',
+          })
+          part_size = int(started.get('partSize') or 0)
+          assert part_size >= 5 * 1024 * 1024, started
           key, upload_id = started['key'], started['uploadId']
-          for i in range(3):
-              chunk = source[i * part_size:(i + 1) * part_size]
+          source = (b'R2-SMOKE-' * ((total_size // 9) + 1))[:total_size]
+          total_parts = math.ceil(total_size / part_size)
+          for i in range(total_parts):
+              chunk = source[i * part_size:min(total_size, (i + 1) * part_size)]
               result = multipart_chunk(key, upload_id, i + 1, chunk)
               assert int(result.get('partNumber', -1)) == i + 1, result
               if i == 0:
                   status = public_json('/api/uploads/status', 'POST', {'key': key, 'uploadId': upload_id})
-                  assert int(status.get('nextOffset', -1)) == part_size, status
+                  assert int(status.get('nextOffset', -1)) == len(chunk), status
           done = public_json('/api/uploads/complete', 'POST', {'key': key, 'uploadId': upload_id})
-          assert int(done.get('size', -1)) == len(source), done
-          q = urllib.parse.urlencode({'key': key, 'access_key': access})
+          assert int(done.get('size', -1)) == total_size, done
+          ticket = public_json('/api/files/download-ticket', 'POST', {'key': key})
+          assert ticket.get('ticket'), ticket
+          q = urllib.parse.urlencode({'key': key, 'ticket': ticket['ticket']})
           downloaded = request('/api/files/download?' + q, expect_json=False)[2]
-          assert downloaded == source
+          assert hashlib.sha256(downloaded).digest() == hashlib.sha256(source).digest()
           public_json('/api/files?' + urllib.parse.urlencode({'key': key}), 'DELETE')
-          print('public upload/resume/download: OK')
+          print(f'public R2 upload/resume/download: OK ({total_parts} parts, {part_size} bytes/part)')
 
           internal_source = b'I' * (3 * 1024 * 1024)
-          ikey = 'temp/__core22_internal_smoke__/known.bin'
-          istart = internal_json('/api/internal/uploads/start', 'POST', {'key': ikey, 'size': len(internal_source), 'type': 'application/octet-stream'})
+          ikey = 'temp/__r2_internal_smoke__/known.bin'
+          istart = internal_json('/api/internal/uploads/start', 'POST', {
+              'key': ikey,
+              'size': len(internal_source),
+              'type': 'application/octet-stream',
+          })
           iq = urllib.parse.urlencode({'key': ikey, 'uploadId': istart['uploadId'], 'partNumber': 1})
-          request('/api/internal/uploads/part?' + iq, 'PUT', internal_source, {'x-worker-token': worker_token, 'content-type': 'application/octet-stream', 'content-length': str(len(internal_source))})
-          idone = internal_json('/api/internal/uploads/complete', 'POST', {'key': ikey, 'uploadId': istart['uploadId'], 'parts': []})
+          request('/api/internal/uploads/part?' + iq, 'PUT', internal_source, {
+              'x-worker-token': worker_token,
+              'content-type': 'application/octet-stream',
+              'content-length': str(len(internal_source)),
+          })
+          idone = internal_json('/api/internal/uploads/complete', 'POST', {
+              'key': ikey,
+              'uploadId': istart['uploadId'],
+              'parts': [],
+          })
           assert int(idone.get('size', -1)) == len(internal_source), idone
           idata = request('/api/internal/file?' + urllib.parse.urlencode({'key': ikey}), headers={'x-worker-token': worker_token}, expect_json=False)[2]
           assert idata == internal_source
           public_json('/api/files?' + urllib.parse.urlencode({'key': ikey}), 'DELETE')
-          print('internal known-size upload: OK')
+          print('internal known-size R2 upload: OK')
 
           stream_source = b'S' * (1024 * 1024 + 777)
-          skey = 'temp/__core22_internal_smoke__/stream.bin'
-          sstart = internal_json('/api/internal/uploads/start', 'POST', {'key': skey, 'type': 'application/octet-stream'})
-          sq = urllib.parse.urlencode({'key': skey, 'uploadId': sstart['uploadId'], 'partNumber': 1, 'finalTotal': len(stream_source)})
-          request('/api/internal/uploads/part?' + sq, 'PUT', stream_source, {'x-worker-token': worker_token, 'content-type': 'application/octet-stream', 'content-length': str(len(stream_source))})
-          sdone = internal_json('/api/internal/uploads/complete', 'POST', {'key': skey, 'uploadId': sstart['uploadId'], 'parts': []})
+          skey = 'temp/__r2_internal_smoke__/stream.bin'
+          sstart = internal_json('/api/internal/uploads/start', 'POST', {
+              'key': skey,
+              'type': 'application/octet-stream',
+          })
+          sq = urllib.parse.urlencode({
+              'key': skey,
+              'uploadId': sstart['uploadId'],
+              'partNumber': 1,
+              'finalTotal': len(stream_source),
+          })
+          request('/api/internal/uploads/part?' + sq, 'PUT', stream_source, {
+              'x-worker-token': worker_token,
+              'content-type': 'application/octet-stream',
+              'content-length': str(len(stream_source)),
+          })
+          sdone = internal_json('/api/internal/uploads/complete', 'POST', {
+              'key': skey,
+              'uploadId': sstart['uploadId'],
+              'parts': [],
+          })
           assert int(sdone.get('size', -1)) == len(stream_source), sdone
           public_json('/api/files?' + urllib.parse.urlencode({'key': skey}), 'DELETE')
-          print('internal streaming upload: OK')
+          print('internal streaming R2 upload: OK')
           PY
 
       - name: Deployment summary
         run: |
           echo '### Backend deployment passed' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Job pause, resume and retry controls enabled' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Browser resumable upload enabled' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Cloudflare R2 temporary storage binding verified' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Public multipart upload/resume/secure-download/delete passed' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Internal known-size and streaming R2 uploads passed' >> "$GITHUB_STEP_SUMMARY"
           echo '- Translation smoke test passed' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Google Drive upload smoke tests passed' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Temporary retention policy: 30 min / 10 min after download' >> "$GITHUB_STEP_SUMMARY"
