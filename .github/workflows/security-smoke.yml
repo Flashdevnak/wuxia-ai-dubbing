@@ -97,6 +97,9 @@ jobs:
           assert health.get('signedUploads') is True, health
           assert health.get('downloadTickets') is True, health
           assert health.get('activeDeleteProtection') is True, health
+          if strict_v2:
+              assert health.get('separateAudioInput') is True, health
+              assert health.get('humanStudioUi') is True, health
           print('health safety + R2 guard: OK')
 
           _, html_bytes = call('/?smoke=safety', expect_json=False)
@@ -105,6 +108,8 @@ jobs:
           if strict_v2:
               assert 'full-auto.js?v=full-auto2' in html, 'full-auto.js v2 was not injected into Worker HTML'
               assert 'full-auto.css?v=full-auto2' in html, 'full-auto.css v2 was not injected into Worker HTML'
+              assert 'studio-ui.js?v=human1' in html, 'human studio JavaScript was not injected'
+              assert 'studio-ui.css?v=human1' in html, 'human studio CSS was not injected'
           else:
               assert 'full-auto.js?v=full-auto' in html and 'full-auto.css?v=full-auto' in html
           print('runtime safety + full-auto UI assets: OK')
@@ -116,6 +121,15 @@ jobs:
                   assert marker in ui, f'missing clarified source marker: {marker}'
               assert 'transcript-job' in ui and 'ใช้วิธีแนะนำ: เลือก MP4' in ui
               print('clear production/upload vs experimental/YouTube UX: OK')
+
+              _, studio_js_bytes = call('/studio-ui.js?v=human1', expect_json=False)
+              studio_js = studio_js_bytes.decode('utf-8', 'replace')
+              for marker in ('มีไฟล์เสียงแยก', 'sourceAudioKey', 'human-v1', 'ยุทธภพ สตูดิโอ'):
+                  assert marker in studio_js, f'missing separate-audio/human UI marker: {marker}'
+              _, studio_css_bytes = call('/studio-ui.css?v=human1', expect_json=False)
+              studio_css = studio_css_bytes.decode('utf-8', 'replace')
+              assert '.media-pair-panel' in studio_css and '.brand-mark' in studio_css
+              print('separate audio + human-designed studio UI: OK')
 
           payload = b'safety-r2-smoke!'
           _, started = call('/api/uploads/start', 'POST', {
@@ -167,6 +181,7 @@ jobs:
           echo '- Safety + temporary R2 guards exposed by /api/health' >> "$GITHUB_STEP_SUMMARY"
           echo '- Runtime safety/full-auto asset injection present' >> "$GITHUB_STEP_SUMMARY"
           echo '- Post-deploy run verifies upload=recommended and YouTube=experimental UI v2' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Separate video + audio input capability exposed and human studio assets served' >> "$GITHUB_STEP_SUMMARY"
           echo '- Signed resumable upload IDs verified' >> "$GITHUB_STEP_SUMMARY"
           echo '- R2 multipart completion verified' >> "$GITHUB_STEP_SUMMARY"
           echo '- Short-lived secure download tickets verified' >> "$GITHUB_STEP_SUMMARY"
