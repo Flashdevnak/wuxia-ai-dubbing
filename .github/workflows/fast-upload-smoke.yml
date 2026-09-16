@@ -4,6 +4,10 @@ on:
   workflow_run:
     workflows: ["Deploy Cloudflare Backend"]
     types: [completed]
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/fast-upload-smoke.yml'
   workflow_dispatch:
 
 permissions:
@@ -11,7 +15,7 @@ permissions:
 
 jobs:
   fast-upload-smoke:
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     env:
       WORKER_URL: https://wuxia-ai-dubbing.26nak-testdev.workers.dev
