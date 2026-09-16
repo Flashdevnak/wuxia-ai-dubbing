@@ -330,6 +330,22 @@ async function cleanupCaptionAfterCompletedDub(request, env, url) {
   return response;
 }
 
+async function injectSafetyAsset(response) {
+  if (!response?.ok) return response;
+  const contentType = String(response.headers.get('content-type') || '');
+  if (!contentType.includes('text/html')) return response;
+  const html = await response.text();
+  if (html.includes('safety.js')) {
+    return new Response(html, { status: response.status, headers: response.headers });
+  }
+  const script = '<script src="./safety.js?v=guard1" defer></script>';
+  const next = html.includes('</body>') ? html.replace('</body>', `  ${script}\n</body>`) : `${html}\n${script}`;
+  const headers = new Headers(response.headers);
+  headers.delete('content-length');
+  headers.set('cache-control', 'no-store, no-cache, must-revalidate');
+  return new Response(next, { status: response.status, headers });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -398,6 +414,10 @@ export default {
       return baseWorker.fetch(rewritten, env);
     }
 
-    return baseWorker.fetch(request, env);
+    const response = await baseWorker.fetch(request, env);
+    if (request.method === 'GET' && (path === '/' || path === '/index.html')) {
+      return injectSafetyAsset(response);
+    }
+    return response;
   },
 };
