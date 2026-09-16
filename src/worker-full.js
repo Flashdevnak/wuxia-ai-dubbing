@@ -192,7 +192,7 @@ async function injectFullAutoAssets(response) {
 
   let html = await response.text();
   if (!html.includes('full-auto.css')) {
-    const style = '<link rel="stylesheet" href="./full-auto.css?v=full-auto1" />';
+    const style = '<link rel="stylesheet" href="./full-auto.css?v=full-auto2" />';
     html = html.includes('</head>') ? html.replace('</head>', `  ${style}\n</head>`) : `${style}\n${html}`;
   }
   if (!html.includes('safety.js')) {
@@ -200,7 +200,7 @@ async function injectFullAutoAssets(response) {
     html = html.includes('</body>') ? html.replace('</body>', `  ${safety}\n</body>`) : `${html}\n${safety}`;
   }
   if (!html.includes('full-auto.js')) {
-    const fullAuto = '<script src="./full-auto.js?v=full-auto1" defer></script>';
+    const fullAuto = '<script src="./full-auto.js?v=full-auto2" defer></script>';
     html = html.includes('</body>') ? html.replace('</body>', `  ${fullAuto}\n</body>`) : `${html}\n${fullAuto}`;
   }
 
