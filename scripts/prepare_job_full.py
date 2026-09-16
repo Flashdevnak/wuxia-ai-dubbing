@@ -100,6 +100,41 @@ def _completed_chunk_available(client: WorkerClient, job: dict, job_id: str, ind
     return all(client.exists(key) for key in required)
 
 
+def _recover_completed_dub_chunks(client: WorkerClient, job: dict, github_output: str | None) -> bool:
+    job_id = str(job.get("id") or "")
+    total = int(job.get("chunkTotal") or 0)
+    if not job_id or total < 1:
+        return False
+    if not all(_completed_chunk_available(client, job, job_id, i) for i in range(total)):
+        return False
+
+    recovered = {
+        "jobId": job_id,
+        "duration": float(job.get("duration") or 0),
+        "total": total,
+        "chunks": [
+            {"index": i, "key": f"temp/{job_id}/source/chunk_{i:05d}.mkv", "size": 0}
+            for i in range(total)
+        ],
+        "sourceLang": job.get("sourceLang", "auto"),
+        "targetLang": job.get("targetLang", "th"),
+        "mediaPairMode": DIRECT_PAIR_MODE,
+        "storageEfficient": True,
+        "recoveredWithoutOriginals": True,
+    }
+    client.patch_job(
+        job_id,
+        status="processing",
+        progress=94,
+        stage=f"พบไฟล์พากย์ครบ {total} ช่วง กำลังรวมวิดีโอ",
+        duration=float(job.get("duration") or 0),
+        chunkTotal=total,
+    )
+    print(f"Recovering direct-pair job from {total} completed dubbed chunks; originals are not required", flush=True)
+    base.emit_outputs(recovered, github_output)
+    return True
+
+
 def _reuse_prepared_manifest(client: WorkerClient, job: dict, manifest_key: str, manifest_path: Path) -> dict | None:
     if not client.exists(manifest_key):
         return None
@@ -158,6 +193,13 @@ def prepare_separate_audio_direct() -> bool:
         raise RuntimeError("งานอัปโหลดไม่มีวิดีโอต้นฉบับ")
 
     client = WorkerClient(worker_url, token)
+
+    # When every dubbed chunk is already durable, retries can go straight to
+    # finalization. This makes it safe for the Worker to release large original
+    # uploads before final MP4 export and prevents a late 5 GB storage spike.
+    if _recover_completed_dub_chunks(client, job, github_output):
+        return True
+
     if not client.exists(source_key):
         fail(client, job_id, "ไม่พบไฟล์วิดีโอต้นฉบับ กรุณาอัปโหลดวิดีโอใหม่")
     if not client.exists(audio_key):
