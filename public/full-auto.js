@@ -189,7 +189,7 @@
       const isTranscript = /คำบรรยาย YouTube/i.test(meta);
       const youtubeBlocked = /YouTube.*(?:ปฏิเสธ|บล็อก|เข้าไม่ได้|ดึงคำบรรยาย)|ยังดึงคำบรรยายจาก YouTube ไม่ได้/i.test(errorText);
 
-      if (isTranscript) card.querySelector('.r3-repair-btn')?.remove();
+      if (isTranscript) card.classList.add('transcript-job');
       if (!youtubeBlocked || card.dataset.youtubeFallbackDecorated === '1') return;
       card.dataset.youtubeFallbackDecorated = '1';
       if (error) {
@@ -316,7 +316,9 @@
     installTemporaryStorageCopy();
     installFullAutoDefaults();
     installJobGuidance();
+    if (!validYoutube(youtubeUrl())) $('#uploadCard')?.click();
     updatePrimaryAction();
+    updateHybridHint();
     document.documentElement.dataset.fullAutoDubbing = 'v2';
   }
 
