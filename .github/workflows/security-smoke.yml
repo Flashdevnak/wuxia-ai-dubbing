@@ -25,15 +25,13 @@ jobs:
       WORKER_URL: https://wuxia-ai-dubbing.26nak-testdev.workers.dev
       ACCESS_KEY: ${{ secrets.WUXIA_ACCESS_KEY }}
     steps:
-      - name: Verify safety wrapper and secure R2 upload session
+      - name: Verify safety wrapper, Studio V2 and secure R2 upload session
         run: |
           python - <<'PY'
-          import io, json, os, urllib.error, urllib.parse, urllib.request, uuid
+          import io, json, os, re, urllib.error, urllib.parse, urllib.request, uuid
 
           base = os.environ['WORKER_URL'].rstrip('/')
           access = os.environ['ACCESS_KEY']
-          event_name = os.environ.get('GITHUB_EVENT_NAME', '')
-          strict_v2 = event_name in {'workflow_run', 'workflow_dispatch'}
           ua = 'Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 Chrome/140.0 Mobile Safari/537.36'
 
           def call(path, method='GET', payload=None, auth=False, expect_json=True, raw_body=None, extra_headers=None):
@@ -92,44 +90,35 @@ jobs:
           assert health.get('storageReady') is True, health
           assert health.get('backend') == 'cloudflare-r2-temp', health
           assert health.get('temporaryStorage') is True, health
-          assert health.get('fullAutoUi') is True, health
           assert health.get('safety') == 'guard-v1', health
           assert health.get('signedUploads') is True, health
           assert health.get('downloadTickets') is True, health
           assert health.get('activeDeleteProtection') is True, health
-          if strict_v2:
-              assert health.get('separateAudioInput') is True, health
-              assert health.get('humanStudioUi') is True, health
+          assert health.get('separateAudioInput') is True, health
+          assert health.get('humanStudioUi') is True, health
           print('health safety + R2 guard: OK')
 
-          _, html_bytes = call('/?smoke=safety', expect_json=False)
+          _, html_bytes = call('/', expect_json=False)
           html = html_bytes.decode('utf-8', 'replace')
-          assert 'safety.js?v=guard1' in html, 'safety.js was not injected into Worker HTML'
-          if strict_v2:
-              assert 'full-auto.js?v=full-auto2' in html, 'full-auto.js v2 was not injected into Worker HTML'
-              assert 'full-auto.css?v=full-auto2' in html, 'full-auto.css v2 was not injected into Worker HTML'
-              assert 'studio-ui.js?v=human1' in html, 'human studio JavaScript was not injected'
-              assert 'studio-ui.css?v=human1' in html, 'human studio CSS was not injected'
-          else:
-              assert 'full-auto.js?v=full-auto' in html and 'full-auto.css?v=full-auto' in html
-          print('runtime safety + full-auto UI assets: OK')
+          for marker in ('safety.js', 'studio-ui.js', 'studio-ui.css', 'studio-v2.js', 'studio-v2.css', 'upload-fast.js', 'mobile-upload-recovery.js', 'pair-recovery.js'):
+              assert marker in html, f'missing runtime asset: {marker}'
+          assert 'สร้างงานพากย์ไทย' in html, 'streamlined Studio V2 workflow missing'
+          assert 'อัปโหลดวิดีโอจากเครื่อง' in html, 'primary upload workflow missing'
+          assert 'ใช้ลิงก์ YouTube แทน' in html, 'experimental YouTube section missing'
+          assert 'projectSlot' in html and 'toastHost' in html, 'Studio V2 UX anchors missing'
+          assert not re.findall(r'(?:src|href)=["\'][^"\']+\?v=', html), 'version query parameters still served in HTML'
+          assert 'full-auto.js' in html, 'legacy full-auto suppression marker missing'
+          print('runtime safety + streamlined Studio V2 assets: OK')
 
-          if strict_v2:
-              _, ui_bytes = call('/full-auto.js?v=full-auto2', expect_json=False)
-              ui = ui_bytes.decode('utf-8', 'replace')
-              for marker in ('เลือกทางที่ใช้จริง', 'อัปโหลดไฟล์ — แนะนำ', 'YouTube โดยตรง — ทดลอง', 'Whisper'):
-                  assert marker in ui, f'missing clarified source marker: {marker}'
-              assert 'transcript-job' in ui and 'ใช้วิธีแนะนำ: เลือก MP4' in ui
-              print('clear production/upload vs experimental/YouTube UX: OK')
-
-              _, studio_js_bytes = call('/studio-ui.js?v=human1', expect_json=False)
-              studio_js = studio_js_bytes.decode('utf-8', 'replace')
-              for marker in ('มีไฟล์เสียงแยก', 'sourceAudioKey', 'human-v1', 'ยุทธภพ สตูดิโอ'):
-                  assert marker in studio_js, f'missing separate-audio/human UI marker: {marker}'
-              _, studio_css_bytes = call('/studio-ui.css?v=human1', expect_json=False)
-              studio_css = studio_css_bytes.decode('utf-8', 'replace')
-              assert '.media-pair-panel' in studio_css and '.brand-mark' in studio_css
-              print('separate audio + human-designed studio UI: OK')
+          _, studio_js_bytes = call('/studio-v2.js', expect_json=False)
+          studio_js = studio_js_bytes.decode('utf-8', 'replace')
+          for marker in ('clearProjectIdentity', 'decorateAllJobs', 'toastHost', 'setDefaultMode'):
+              assert marker in studio_js, f'missing Studio V2 behavior: {marker}'
+          _, pair_js_bytes = call('/studio-ui.js', expect_json=False)
+          pair_js = pair_js_bytes.decode('utf-8', 'replace')
+          for marker in ('มีไฟล์เสียงแยก', 'sourceAudioKey', 'media-pair-panel'):
+              assert marker in pair_js, f'missing separate-audio behavior: {marker}'
+          print('project reset + separate audio behavior: OK')
 
           payload = b'safety-r2-smoke!'
           _, started = call('/api/uploads/start', 'POST', {
@@ -179,9 +168,9 @@ jobs:
         run: |
           echo '### Worker safety smoke passed' >> "$GITHUB_STEP_SUMMARY"
           echo '- Safety + temporary R2 guards exposed by /api/health' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Runtime safety/full-auto asset injection present' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Post-deploy run verifies upload=recommended and YouTube=experimental UI v2' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Separate video + audio input capability exposed and human studio assets served' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Streamlined Studio V2 and clean asset URLs verified' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Separate video + audio input verified' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Project identity reset behavior verified' >> "$GITHUB_STEP_SUMMARY"
           echo '- Signed resumable upload IDs verified' >> "$GITHUB_STEP_SUMMARY"
           echo '- R2 multipart completion verified' >> "$GITHUB_STEP_SUMMARY"
           echo '- Short-lived secure download tickets verified' >> "$GITHUB_STEP_SUMMARY"
