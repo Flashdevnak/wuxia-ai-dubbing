@@ -1,0 +1,102 @@
+name: Thai Media Smoke
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/dub_chunk.py'
+      - 'scripts/dub_guard.py'
+      - 'requirements.txt'
+      - '.github/workflows/dubbing.yml'
+      - '.github/workflows/thai-media-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  thai-media-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install ffmpeg and Thai font
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg fonts-noto-core
+          ffmpeg -version | head -n 1
+          fc-match "Noto Sans Thai" | head -n 1
+
+      - name: Install lightweight TTS smoke dependencies
+        run: python -m pip install --disable-pip-version-check "edge-tts>=7.2.0,<8"
+
+      - name: Generate real Thai TTS sample
+        run: |
+          python - <<'PY'
+          import asyncio
+          from pathlib import Path
+          import edge_tts
+
+          async def main():
+              voices = await edge_tts.list_voices()
+              thai = [v for v in voices if str(v.get('Locale', '')).lower() == 'th-th']
+              if not thai:
+                  raise SystemExit('No th-TH Edge TTS voice available')
+              voice = str(thai[0]['ShortName'])
+              print('Thai voice:', voice)
+              last = None
+              for attempt in range(1, 4):
+                  try:
+                      await edge_tts.Communicate(
+                          text='ทดสอบระบบพากย์ไทย เสียง ภาพ และคำบรรยายทำงานครบ',
+                          voice=voice,
+                          rate='-5%',
+                      ).save('thai-smoke.mp3')
+                      if Path('thai-smoke.mp3').stat().st_size > 0:
+                          return
+                  except Exception as exc:
+                      last = exc
+                      await asyncio.sleep(attempt)
+              raise RuntimeError(f'Edge TTS smoke failed: {last}')
+
+          asyncio.run(main())
+          PY
+
+      - name: Render Thai subtitle and mix audio
+        run: |
+          cat > thai-smoke.srt <<'EOF'
+          1
+          00:00:00,200 --> 00:00:03,800
+          ทดสอบระบบพากย์ไทย เสียง ภาพ และคำบรรยายทำงานครบ
+          EOF
+
+          ffmpeg -hide_banner -loglevel error -y \
+            -f lavfi -i "color=c=black:s=640x360:r=30:d=5" \
+            -f lavfi -i "sine=frequency=220:sample_rate=48000:duration=5" \
+            -i thai-smoke.mp3 \
+            -filter_complex "[1:a]volume=0.12[bg];[2:a]aresample=48000,loudnorm=I=-16:TP=-1.5:LRA=7[voice];[bg][voice]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95[aout]" \
+            -map 0:v:0 -map '[aout]' \
+            -vf "subtitles=thai-smoke.srt:force_style='FontName=Noto Sans Thai,FontSize=28,Alignment=2,MarginV=36,BorderStyle=3,Outline=1,Shadow=0'" \
+            -c:v libx264 -preset ultrafast -pix_fmt yuv420p \
+            -c:a aac -b:a 160k -t 5 thai-smoke.mp4
+
+      - name: Verify MP4 has video and audio
+        run: |
+          test -s thai-smoke.mp4
+          VIDEO_CODEC="$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of default=nw=1:nk=1 thai-smoke.mp4)"
+          AUDIO_CODEC="$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of default=nw=1:nk=1 thai-smoke.mp4)"
+          DURATION="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 thai-smoke.mp4)"
+          echo "video=$VIDEO_CODEC audio=$AUDIO_CODEC duration=$DURATION"
+          test -n "$VIDEO_CODEC"
+          test -n "$AUDIO_CODEC"
+          python - <<'PY'
+          import subprocess
+          duration = float(subprocess.check_output([
+              'ffprobe','-v','error','-show_entries','format=duration','-of','default=nw=1:nk=1','thai-smoke.mp4'
+          ], text=True).strip())
+          assert 4.5 <= duration <= 5.5, duration
+          PY
