@@ -5,6 +5,10 @@
   const VIDEO_EXTS = new Set(['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v']);
   const AUDIO_EXTS = new Set(['m4a', 'mp3', 'aac', 'wav', 'ogg', 'opus', 'flac', 'webm', 'mp4']);
   const API_BASE = window.WUXIA_API_BASE || '';
+  const FOREGROUND_STALL_MS = 8000;
+  const RESPONSE_STALL_MS = 30000;
+  const HARD_XHR_TIMEOUT_MS = 120000;
+  const WATCHDOG_INTERVAL_MS = 1500;
 
   const runtime = {
     pairMode: 'embedded',
@@ -147,22 +151,71 @@
       form.append('chunk', chunk, `part-${String(partNumber).padStart(5, '0')}.bin`);
 
       const xhr = new XMLHttpRequest();
+      let settled = false;
+      let watchdog = null;
+      let abortReason = '';
+      let lastProgressAt = Date.now();
+      let bodyFinished = false;
+
+      const cleanup = () => {
+        if (watchdog) clearInterval(watchdog);
+        watchdog = null;
+      };
+      const resolveOnce = value => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(value);
+      };
+      const rejectOnce = error => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      };
+
       xhr.open('POST', `${API_BASE}/api/uploads/chunk`, true);
-      xhr.timeout = 300000;
+      xhr.timeout = HARD_XHR_TIMEOUT_MS;
       xhr.responseType = 'text';
       xhr.setRequestHeader('x-access-key', getAccessKey());
       xhr.upload.onprogress = event => {
-        if (event.lengthComputable) onProgress?.(Math.min(chunk.size, Number(event.loaded) || 0));
+        lastProgressAt = Date.now();
+        if (event.lengthComputable) {
+          const loaded = Math.min(chunk.size, Number(event.loaded) || 0);
+          bodyFinished = loaded >= chunk.size;
+          onProgress?.(loaded);
+        }
       };
       xhr.onload = () => {
         let data = {};
         try { data = xhr.responseText ? JSON.parse(xhr.responseText) : {}; } catch {}
-        if (xhr.status >= 200 && xhr.status < 300) resolve(data);
-        else reject(new Error(data.error || data.detail || `อัปโหลดส่วนนี้ไม่สำเร็จ ${xhr.status}`));
+        if (xhr.status >= 200 && xhr.status < 300) resolveOnce(data);
+        else rejectOnce(new Error(data.error || data.detail || `อัปโหลดส่วนนี้ไม่สำเร็จ ${xhr.status}`));
       };
-      xhr.onerror = () => reject(new Error('ส่งไฟล์ไม่สำเร็จ กรุณาตรวจสอบอินเทอร์เน็ต'));
-      xhr.ontimeout = () => reject(new Error('อัปโหลดส่วนนี้นานเกินไป'));
-      xhr.onabort = () => reject(new Error('อัปโหลดถูกยกเลิก'));
+      xhr.onerror = () => rejectOnce(new Error('ส่งไฟล์ไม่สำเร็จ กรุณาตรวจสอบอินเทอร์เน็ต'));
+      xhr.ontimeout = () => rejectOnce(new Error('อัปโหลดส่วนนี้นานเกินไป ระบบจะเชื่อมต่อใหม่'));
+      xhr.onabort = () => rejectOnce(new Error(abortReason || 'อัปโหลดถูกยกเลิก'));
+
+      // Foreground stall watchdog V3: Android can leave XHR alive but frozen after
+      // the browser returns to the foreground. Do not wait for the old five-minute
+      // XHR timeout. As soon as the page is visible, replace only a part that has
+      // stopped making progress; completed multipart parts remain on R2.
+      watchdog = setInterval(() => {
+        if (settled) return;
+        if (typeof document !== 'undefined' && document.hidden) return;
+        const idleMs = Date.now() - lastProgressAt;
+        const stallLimit = bodyFinished ? RESPONSE_STALL_MS : FOREGROUND_STALL_MS;
+        if (idleMs < stallLimit) return;
+        abortReason = bodyFinished
+          ? 'เซิร์ฟเวอร์ไม่ตอบกลับหลังส่งส่วนไฟล์ครบ ระบบกำลังเชื่อมต่อใหม่'
+          : 'การส่งส่วนไฟล์หยุดตอบสนอง ระบบกำลังเชื่อมต่อใหม่';
+        try {
+          xhr.abort();
+        } catch {
+          rejectOnce(new Error(abortReason));
+        }
+      }, WATCHDOG_INTERVAL_MS);
+
       xhr.send(form);
     });
   }
@@ -275,7 +328,10 @@
           lastError = error;
           activeLoaded.delete(task.partNumber);
           publish();
-          if (attempt < 5) await sleep(Math.min(4500, 500 * attempt));
+          if (/หยุดตอบสนอง|เชื่อมต่อใหม่|ยกเลิก|นานเกินไป/i.test(String(error?.message || ''))) {
+            onStage?.(`ส่วน ${task.partNumber}/${totalParts} สะดุดชั่วคราว · กำลังเชื่อมต่อใหม่`);
+          }
+          if (attempt < 5) await sleep(Math.min(1800, 300 * attempt));
         }
       }
       throw lastError || new Error(`ส่งส่วน ${task.partNumber} ไม่สำเร็จ`);
@@ -523,8 +579,9 @@
     window.uploadFile = fastUploadVideo;
     window.createJob = fastCreateJob;
     installCaptureGuards();
-    document.documentElement.dataset.uploadEngine = 'parallel-v1';
+    document.documentElement.dataset.uploadEngine = 'parallel-v2';
     document.documentElement.dataset.uploadConcurrencyMax = '4';
+    document.documentElement.dataset.uploadForegroundWatchdog = 'foreground-stall-watchdog-v3';
 
     const status = document.querySelector('#uploadStatus');
     if (status && !status.textContent.trim()) status.textContent = 'พร้อมอัปโหลดแบบหลายช่องทาง';
