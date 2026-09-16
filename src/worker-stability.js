@@ -9,7 +9,7 @@ import {
 } from './storage.js';
 
 const ACTIVE_STATUSES = new Set(['queued', 'processing', 'paused']);
-const STORAGE_COMPACTION_VERSION = 1;
+const STORAGE_COMPACTION_VERSION = 2;
 
 // Retired runtime assets: upload-fast.js and mobile-upload-recovery.js.
 // They remain in repository history for rollback, but are removed from served HTML.
@@ -32,6 +32,10 @@ function jobSourceKeys(job) {
   ].filter(Boolean))];
 }
 
+function logicalKey(file) {
+  return String(file?.appProperties?.logicalKey || '');
+}
+
 async function deleteIfPresent(env, key) {
   if (!key) return 0;
   return Number(await deleteLogical(env, key).catch(() => 0)) || 0;
@@ -46,78 +50,27 @@ async function releaseCompletedChunkSources(env, jobId, index) {
   return freed;
 }
 
-async function compactActiveJobStorage(env, job, filesSnapshot = null) {
+function allDubChunksDurable(job, files) {
   const jobId = String(job?.id || '');
-  if (!jobId || !ACTIVE_STATUSES.has(String(job?.status || ''))) return { bytes: 0, count: 0 };
-  if (Number(job?.chunkTotal || 0) < 1) return { bytes: 0, count: 0 };
-
-  // The manifest is written only after segmentation is complete. Never remove
-  // the old full paired source before this durable checkpoint exists.
-  const manifest = await resolveLogical(env, `temp/${jobId}/manifest.json`).catch(() => null);
-  if (!manifest?.id) return { bytes: 0, count: 0 };
-
-  let bytes = 0;
-  let count = 0;
-
-  // Legacy separate-audio jobs created a full paired_source.mkv before they
-  // were segmented. It is redundant after the manifest exists and can easily
-  // consume another 1-2 GB by itself.
-  const legacyPairFreed = await deleteIfPresent(env, `temp/${jobId}/paired_source.mkv`);
-  if (legacyPairFreed) {
-    bytes += legacyPairFreed;
-    count += 1;
+  const total = Number(job?.chunkTotal || 0);
+  if (!jobId || !Number.isInteger(total) || total < 1) return false;
+  const keys = new Set(files.map(logicalKey));
+  for (let index = 0; index < total; index += 1) {
+    const n = String(index).padStart(5, '0');
+    const required = [
+      `_state/${jobId}/chunks/${n}.json`,
+      `temp/${jobId}/dub/chunk_${n}.ts`,
+      `temp/${jobId}/meta/chunk_${n}.json`,
+    ];
+    if (job?.subtitles !== false) required.push(`temp/${jobId}/subs/chunk_${n}.srt`);
+    if (!required.every(key => keys.has(key))) return false;
   }
-
-  const files = filesSnapshot || await listAppFiles(env);
-  const statePrefix = `_state/${jobId}/chunks/`;
-  const completed = [];
-  for (const file of files) {
-    const key = String(file?.appProperties?.logicalKey || '');
-    if (!key.startsWith(statePrefix) || !key.endsWith('.json')) continue;
-    const match = key.match(/\/([0-9]{5})\.json$/);
-    if (match) completed.push(Number(match[1]));
-  }
-
-  for (const index of completed) {
-    const freed = await releaseCompletedChunkSources(env, jobId, index);
-    if (freed) {
-      bytes += freed;
-      count += 1;
-    }
-  }
-
-  if (bytes > 0) {
-    const current = await readJob(env, jobId).catch(() => null);
-    if (current) {
-      current.storageCompactionVersion = STORAGE_COMPACTION_VERSION;
-      current.storageFreedBytes = Number(current.storageFreedBytes || 0) + bytes;
-      current.storageCompactedAt = new Date().toISOString();
-      await writeJob(env, current).catch(() => {});
-    }
-    console.log(JSON.stringify({ event: 'active-storage-compaction', jobId, bytesFreed: bytes, objectsDeleted: count }));
-  }
-  return { bytes, count };
+  return true;
 }
 
-async function compactAllActiveStorage(env) {
-  const jobs = await listJobs(env);
-  const files = await listAppFiles(env);
-  let bytes = 0;
-  let count = 0;
-  for (const job of jobs) {
-    if (!ACTIVE_STATUSES.has(String(job?.status || ''))) continue;
-    const result = await compactActiveJobStorage(env, job, files);
-    bytes += Number(result.bytes || 0);
-    count += Number(result.count || 0);
-  }
-  return { bytes, count };
-}
-
-async function releaseFinishedJobSources(env, jobId) {
-  const job = await readJob(env, jobId).catch(() => null);
-  if (!job || String(job.status || '') !== 'completed' || job.autoCleanup === false) return { bytes: 0, count: 0 };
-
-  const jobs = await listJobs(env);
+async function releaseOriginalSources(env, job, jobs, reason) {
+  const jobId = String(job?.id || '');
+  if (!jobId || job?.autoCleanup === false) return { bytes: 0, count: 0 };
   let bytes = 0;
   let count = 0;
   for (const key of jobSourceKeys(job)) {
@@ -133,15 +86,116 @@ async function releaseFinishedJobSources(env, jobId) {
       count += 1;
     }
   }
-
   if (bytes > 0) {
-    job.storageCompactionVersion = STORAGE_COMPACTION_VERSION;
-    job.storageFreedBytes = Number(job.storageFreedBytes || 0) + bytes;
-    job.storageSourcesReleasedAt = new Date().toISOString();
-    await writeJob(env, job).catch(() => {});
-    console.log(JSON.stringify({ event: 'completed-source-release', jobId, bytesFreed: bytes, objectsDeleted: count }));
+    console.log(JSON.stringify({ event: 'source-release', jobId, reason, bytesFreed: bytes, objectsDeleted: count }));
   }
   return { bytes, count };
+}
+
+async function compactActiveJobStorage(env, job, filesSnapshot = null, jobsSnapshot = null) {
+  const jobId = String(job?.id || '');
+  if (!jobId || !ACTIVE_STATUSES.has(String(job?.status || ''))) return { bytes: 0, count: 0 };
+  if (Number(job?.chunkTotal || 0) < 1) return { bytes: 0, count: 0 };
+
+  // The manifest is written only after segmentation is complete. Never remove
+  // the old full paired source before this durable checkpoint exists.
+  const manifest = await resolveLogical(env, `temp/${jobId}/manifest.json`).catch(() => null);
+  if (!manifest?.id) return { bytes: 0, count: 0 };
+
+  let bytes = 0;
+  let count = 0;
+  let originalsReleased = false;
+
+  // Legacy separate-audio jobs created a full paired_source.mkv before they
+  // were segmented. It is redundant after the manifest exists and can easily
+  // consume another 1-2 GB by itself.
+  const legacyPairFreed = await deleteIfPresent(env, `temp/${jobId}/paired_source.mkv`);
+  if (legacyPairFreed) {
+    bytes += legacyPairFreed;
+    count += 1;
+  }
+
+  const files = filesSnapshot || await listAppFiles(env);
+  const statePrefix = `_state/${jobId}/chunks/`;
+  const completed = [];
+  for (const file of files) {
+    const key = logicalKey(file);
+    if (!key.startsWith(statePrefix) || !key.endsWith('.json')) continue;
+    const match = key.match(/\/([0-9]{5})\.json$/);
+    if (match) completed.push(Number(match[1]));
+  }
+
+  for (const index of completed) {
+    const freed = await releaseCompletedChunkSources(env, jobId, index);
+    if (freed) {
+      bytes += freed;
+      count += 1;
+    }
+  }
+
+  // Once every dubbed chunk + metadata + subtitle (when enabled) is durable,
+  // finalization no longer needs the original 1-2 GB upload. Retry can recover
+  // directly from the completed dubbed chunks. Releasing originals here keeps
+  // final MP4 export from pushing R2 back toward the 5 GB workspace limit.
+  if (allDubChunksDurable(job, files)) {
+    const jobs = jobsSnapshot || await listJobs(env);
+    const result = await releaseOriginalSources(env, job, jobs, 'all-dub-chunks-durable');
+    bytes += result.bytes;
+    count += result.count;
+    originalsReleased = result.bytes > 0;
+  }
+
+  if (bytes > 0) {
+    const current = await readJob(env, jobId).catch(() => null);
+    if (current) {
+      current.storageCompactionVersion = STORAGE_COMPACTION_VERSION;
+      current.storageFreedBytes = Number(current.storageFreedBytes || 0) + bytes;
+      current.storageCompactedAt = new Date().toISOString();
+      if (originalsReleased) {
+        current.storageSourcesReleasedAt = new Date().toISOString();
+        current.storageSourceReleaseStage = 'all-dub-chunks-durable';
+      }
+      await writeJob(env, current).catch(() => {});
+    }
+    console.log(JSON.stringify({ event: 'active-storage-compaction', jobId, bytesFreed: bytes, objectsDeleted: count, originalsReleased }));
+  }
+  return { bytes, count };
+}
+
+async function handleChunkCompleteCompaction(env, jobId, index) {
+  await releaseCompletedChunkSources(env, jobId, index);
+  const job = await readJob(env, jobId).catch(() => null);
+  if (!job) return;
+  await compactActiveJobStorage(env, job);
+}
+
+async function compactAllActiveStorage(env) {
+  const jobs = await listJobs(env);
+  const files = await listAppFiles(env);
+  let bytes = 0;
+  let count = 0;
+  for (const job of jobs) {
+    if (!ACTIVE_STATUSES.has(String(job?.status || ''))) continue;
+    const result = await compactActiveJobStorage(env, job, files, jobs);
+    bytes += Number(result.bytes || 0);
+    count += Number(result.count || 0);
+  }
+  return { bytes, count };
+}
+
+async function releaseFinishedJobSources(env, jobId) {
+  const job = await readJob(env, jobId).catch(() => null);
+  if (!job || String(job.status || '') !== 'completed' || job.autoCleanup === false) return { bytes: 0, count: 0 };
+  const jobs = await listJobs(env);
+  const result = await releaseOriginalSources(env, job, jobs, 'job-completed');
+  if (result.bytes > 0) {
+    job.storageCompactionVersion = STORAGE_COMPACTION_VERSION;
+    job.storageFreedBytes = Number(job.storageFreedBytes || 0) + result.bytes;
+    job.storageSourcesReleasedAt = new Date().toISOString();
+    job.storageSourceReleaseStage = 'job-completed';
+    await writeJob(env, job).catch(() => {});
+  }
+  return result;
 }
 
 function schedule(ctx, work) {
@@ -189,6 +243,7 @@ async function enrichHealth(response) {
       storageCompactionVersion: STORAGE_COMPACTION_VERSION,
       directSeparateAudioSegmentation: true,
       releaseCompletedSourceChunks: true,
+      releaseOriginalsAfterAllDubChunks: true,
       releaseOriginalsAfterCompletion: true,
       studioUiVersion: 2,
       versionQueryRequired: false,
@@ -262,7 +317,7 @@ export default {
       const body = await chunkCompleteProbe.json().catch(() => ({}));
       const jobId = String(body.jobId || '');
       const index = Number(body.index);
-      if (jobId && Number.isInteger(index)) schedule(ctx, releaseCompletedChunkSources(env, jobId, index));
+      if (jobId && Number.isInteger(index)) schedule(ctx, handleChunkCompleteCompaction(env, jobId, index));
     }
 
     if (response.ok && jobPatchProbe && workerAuthorized(jobPatchProbe, env)) {

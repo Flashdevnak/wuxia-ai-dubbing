@@ -45,12 +45,21 @@ jobs:
             exit 1
           fi
 
-      - name: Active compaction contract
+      - name: Late-stage recovery contract
         run: |
-          grep -q "active-storage-compaction" src/worker-stability.js
-          grep -q "completed-source-release" src/worker-stability.js
-          grep -q "releaseCompletedSourceChunks: true" src/worker-stability.js
-          grep -q "releaseOriginalsAfterCompletion: true" src/worker-stability.js
+          grep -q 'recoveredWithoutOriginals' scripts/prepare_job_full.py
+          grep -q 'Recovering direct-pair job from' scripts/prepare_job_full.py
+          grep -q '_recover_completed_dub_chunks' scripts/prepare_job_full.py
+
+      - name: Peak storage compaction contract
+        run: |
+          grep -q 'STORAGE_COMPACTION_VERSION = 2' src/worker-stability.js
+          grep -q 'active-storage-compaction' src/worker-stability.js
+          grep -q 'source-release' src/worker-stability.js
+          grep -q 'all-dub-chunks-durable' src/worker-stability.js
+          grep -q 'releaseCompletedSourceChunks: true' src/worker-stability.js
+          grep -q 'releaseOriginalsAfterAllDubChunks: true' src/worker-stability.js
+          grep -q 'releaseOriginalsAfterCompletion: true' src/worker-stability.js
           grep -q 'temp/${jobId}/paired_source.mkv' src/worker-stability.js
           grep -q 'temp/${jobId}/source/chunk_${n}.mkv' src/worker-stability.js
           grep -q 'temp/${jobId}/transcript/chunk_${n}.json' src/worker-stability.js
