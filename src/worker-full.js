@@ -29,6 +29,13 @@ function jobOutputId(key) {
   return match ? match[1] : '';
 }
 
+function jobSourceKeys(job) {
+  return [...new Set([
+    String(job?.sourceKey || ''),
+    String(job?.sourceAudioKey || ''),
+  ].filter(Boolean))];
+}
+
 async function markDownloadStarted(env, key) {
   const id = jobOutputId(key);
   if (!id) return;
@@ -74,9 +81,12 @@ async function deleteExpiredJob(env, job, jobs) {
     count += result.count;
   }
 
-  const sourceKey = String(job.sourceKey || '');
-  if (sourceKey) {
-    const shared = jobs.some(other => other.id !== job.id && String(other.sourceKey || '') === sourceKey && ACTIVE_STATUSES.has(String(other.status || '')));
+  for (const sourceKey of jobSourceKeys(job)) {
+    const shared = jobs.some(other => (
+      other.id !== job.id
+      && ACTIVE_STATUSES.has(String(other.status || ''))
+      && jobSourceKeys(other).includes(sourceKey)
+    ));
     if (!shared) {
       const freed = await deleteLogical(env, sourceKey);
       bytes += Number(freed || 0);
@@ -102,9 +112,10 @@ async function deleteExpiredJob(env, job, jobs) {
 
 async function cleanupOrphans(env, jobs, now) {
   const files = await listAppFiles(env);
-  const activeIds = new Set(jobs.filter(j => ACTIVE_STATUSES.has(String(j.status || ''))).map(j => String(j.id || '')));
-  const referencedSources = new Set(jobs.filter(j => ACTIVE_STATUSES.has(String(j.status || ''))).map(j => String(j.sourceKey || '')).filter(Boolean));
-  const referencedCaptions = new Set(jobs.filter(j => ACTIVE_STATUSES.has(String(j.status || ''))).map(j => String(j.captionKey || '')).filter(Boolean));
+  const activeJobs = jobs.filter(j => ACTIVE_STATUSES.has(String(j.status || '')));
+  const activeIds = new Set(activeJobs.map(j => String(j.id || '')));
+  const referencedSources = new Set(activeJobs.flatMap(jobSourceKeys));
+  const referencedCaptions = new Set(activeJobs.map(j => String(j.captionKey || '')).filter(Boolean));
   const cutoff = now - retentionMinutes(env) * 60_000;
   let bytes = 0;
   let count = 0;
