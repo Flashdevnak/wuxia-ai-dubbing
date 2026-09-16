@@ -47,6 +47,7 @@ function cleanGlossary(value) {
 }
 
 function r3Fields(body = {}) {
+  const sourceAudioKey = cleanText(body.sourceAudioKey, 600) || null;
   return {
     r3Enabled: body.r3Enabled !== false,
     r3Version: 3,
@@ -60,6 +61,9 @@ function r3Fields(body = {}) {
     r3Cache: body.r3Cache !== false,
     batchGroup: cleanText(body.batchGroup, 80) || null,
     batchPosition: Number.isFinite(Number(body.batchPosition)) ? Math.max(0, Math.trunc(Number(body.batchPosition))) : null,
+    sourceAudioKey,
+    sourceAudioName: sourceAudioKey ? cleanText(body.sourceAudioName, 180) || null : null,
+    mediaPairMode: sourceAudioKey ? 'separate-audio' : 'embedded-audio',
   };
 }
 
@@ -92,7 +96,21 @@ async function dispatchDubbing(env, job, workerBase) {
   return { triggered: res.ok, status: res.status, detail: res.ok ? undefined : (await res.text()).slice(0, 1000) };
 }
 
+async function validateSourceAudio(env, body = {}) {
+  const raw = cleanText(body.sourceAudioKey, 600);
+  if (!raw) return null;
+  if (String(body.sourceType || 'upload') !== 'upload') return json({ error: 'ไฟล์เสียงแยกใช้ได้กับโหมดอัปโหลดวิดีโอเท่านั้น' }, 400);
+  if (!raw.startsWith('uploads/') || raw.includes('..')) return json({ error: 'ไฟล์เสียงแยกไม่ถูกต้อง' }, 400);
+  const audio = await resolveLogical(env, raw);
+  if (!audio?.id || Number(audio.size || 0) <= 0) return json({ error: 'ไม่พบไฟล์เสียงแยก กรุณาอัปโหลดใหม่' }, 404);
+  body.sourceAudioKey = raw;
+  return null;
+}
+
 async function createOneJob(request, env, ctx, url, body) {
+  const pairError = await validateSourceAudio(env, body);
+  if (pairError) return { response: pairError, data: null };
+
   const headers = new Headers(request.headers);
   headers.set('content-type', 'application/json');
   const forwarded = new Request(new URL('/api/jobs', url.origin), {
@@ -237,6 +255,29 @@ async function handleInternalComplete(request, env, ctx, url) {
   return fullWorker.fetch(request, env, ctx);
 }
 
+async function handleDeleteWithPair(request, env, ctx, url, id) {
+  const before = await readJob(env, id);
+  const response = await fullWorker.fetch(request, env, ctx);
+  if (!response.ok || !before?.sourceAudioKey || before.sourceAudioKey === before.sourceKey) return response;
+
+  let freed = 0;
+  try {
+    freed = Number(await deleteLogical(env, String(before.sourceAudioKey)) || 0);
+  } catch (err) {
+    console.warn('paired audio cleanup failed', err?.message || err);
+    return response;
+  }
+  if (!freed) return response;
+
+  try {
+    const data = await response.clone().json();
+    data.freedBytes = Number(data.freedBytes || 0) + freed;
+    return new Response(JSON.stringify(data), { status: response.status, headers: response.headers });
+  } catch {
+    return response;
+  }
+}
+
 async function enrichHealth(response) {
   if (!response.ok) return response;
   const data = await response.clone().json().catch(() => null);
@@ -253,6 +294,8 @@ async function enrichHealth(response) {
     segmentRepair: true,
     batchQueue: true,
     quotaCacheGuard: true,
+    separateAudioInput: true,
+    humanStudioUi: true,
   });
   return new Response(JSON.stringify(data), { status: response.status, headers: response.headers });
 }
@@ -261,7 +304,9 @@ async function injectR3(response) {
   if (!response.ok || !String(response.headers.get('content-type') || '').includes('text/html')) return response;
   let html = await response.text();
   if (!html.includes('r3-studio.css')) html = html.replace('</head>', '  <link rel="stylesheet" href="./r3-studio.css?v=r3-1" />\n</head>');
+  if (!html.includes('studio-ui.css')) html = html.replace('</head>', '  <link rel="stylesheet" href="./studio-ui.css?v=human1" />\n</head>');
   if (!html.includes('r3-studio.js')) html = html.replace('</body>', '  <script src="./r3-studio.js?v=r3-1" defer></script>\n</body>');
+  if (!html.includes('studio-ui.js')) html = html.replace('</body>', '  <script src="./studio-ui.js?v=human1" defer></script>\n</body>');
   const headers = new Headers(response.headers);
   headers.delete('content-length');
   headers.set('cache-control', 'no-store, no-cache, must-revalidate');
@@ -286,6 +331,11 @@ export default {
       const body = await request.clone().json().catch(() => ({}));
       const created = await createOneJob(request, env, ctx, url, body);
       return created.response;
+    }
+
+    const jobDelete = url.pathname.match(/^\/api\/jobs\/([^/]+)$/);
+    if (jobDelete && request.method === 'DELETE') {
+      return handleDeleteWithPair(request, env, ctx, url, decodeURIComponent(jobDelete[1]));
     }
 
     let response = await fullWorker.fetch(request, env, ctx);
