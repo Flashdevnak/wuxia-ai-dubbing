@@ -2,7 +2,7 @@ name: Validate web project
 
 on:
   push:
-    branches: [main, codex/full-auto-dubbing-v1]
+    branches: [main, codex/full-auto-dubbing-v1, codex/r3-runtime-integration]
   pull_request:
 
 jobs:
@@ -21,9 +21,11 @@ jobs:
           node --check public/app.js
           node --check public/safety.js
           node --check public/full-auto.js
+          node --check public/r3-studio.js
           node --check src/worker.js
           node --check src/worker-safe.js
           node --check src/worker-full.js
+          node --check src/worker-r3.js
           node --check src/storage.js
           node --check src/youtube.js
       - name: Python syntax check
@@ -34,26 +36,34 @@ jobs:
             scripts/prepare_job_full.py \
             scripts/dub_chunk.py \
             scripts/dub_guard.py \
+            scripts/r3_studio.py \
+            scripts/test_r3_studio.py \
             scripts/voice_profiles.py \
             scripts/extract_transcript_job.py \
             scripts/youtube_transcript.py \
             scripts/finalize_job.py
-      - name: Verify full automatic dubbing contract
+      - name: Run R3 engine acceptance
+        working-directory: scripts
+        run: python test_r3_studio.py
+      - name: Verify full automatic R3 contract
         run: |
           test -f public/index.html
           test -f public/styles.css
           test -f public/app.js
           test -f public/safety.js
           test -f public/full-auto.js
-          test -f public/full-auto.css
+          test -f public/r3-studio.js
+          test -f public/r3-studio.css
           test -f src/worker.js
           test -f src/worker-safe.js
           test -f src/worker-full.js
+          test -f src/worker-r3.js
           test -f src/storage.js
           test -f src/youtube.js
           test -f wrangler.jsonc
           test -f requirements.txt
           test -f scripts/dub_guard.py
+          test -f scripts/r3_studio.py
           test -f scripts/voice_profiles.py
           test -f scripts/prepare_job_full.py
           test -f .github/workflows/dubbing.yml
@@ -63,13 +73,19 @@ jobs:
           grep -q "python scripts/dub_guard.py" .github/workflows/dubbing.yml
           grep -q "python scripts/prepare_job_full.py" .github/workflows/dubbing.yml
           grep -q "Noto Sans Thai" .github/workflows/dubbing.yml
-          grep -q "AUDIO_PROFILE_VERSION = 5" scripts/dub_guard.py
+          grep -q "AUDIO_PROFILE_VERSION = 6" scripts/dub_guard.py
+          grep -q "R3 Quality Gate" scripts/dub_guard.py
+          grep -q "translation cache HIT" scripts/dub_guard.py
           grep -q "auto-cast" scripts/voice_profiles.py
           grep -q "youtube-auto-hybrid" scripts/prepare_job_full.py
           grep -q "ระบบไม่ส่งออกไฟล์ไทยที่ผิดภาษา" scripts/extract_transcript_job.py
-          grep -q '"main": "src/worker-full.js"' wrangler.jsonc
+          grep -q '"main": "src/worker-r3.js"' wrangler.jsonc
           grep -q '"binding": "MEDIA_BUCKET"' wrangler.jsonc
           grep -q '"*/10 \* \* \* \*"' wrangler.jsonc
+          grep -q "r3SmartStudio" src/worker-r3.js
+          grep -q "/api/r3/batch" src/worker-r3.js
+          grep -q "repair" src/worker-r3.js
+          grep -q "r3-studio.js" src/worker-r3.js
           grep -q "download-ticket" src/worker-safe.js
           grep -q "temporary-cleanup" src/worker-full.js
           grep -q "full-auto.js" public/safety.js
