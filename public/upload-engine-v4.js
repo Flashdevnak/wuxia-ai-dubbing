@@ -127,12 +127,14 @@
   function connectionConcurrency(file, resumed) {
     const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
     const effective = String(connection?.effectiveType || '').toLowerCase();
-    if (connection?.saveData) return 1;
+    const size = Number(file?.size || 0);
     if (effective.includes('2g')) return 1;
-    if (effective === '3g') return 2;
-    if (resumed) return 2;
-    if (Number(file?.size || 0) < 64 * 1024 * 1024) return 2;
-    if (Number(file?.size || 0) < 256 * 1024 * 1024) return 3;
+    if (effective === '3g') return size >= 512 * 1024 * 1024 ? 3 : 2;
+    if (connection?.saveData) return size >= 512 * 1024 * 1024 ? 3 : 2;
+    // Resumed multipart sessions already reconcile completed parts on the server,
+    // so large resumed files can safely use the same parallelism as fresh files.
+    if (size < 64 * 1024 * 1024) return 2;
+    if (size < 256 * 1024 * 1024) return 3;
     return 4;
   }
 
@@ -413,9 +415,17 @@
     const pct = Math.max(0, Math.min(100, Number(percent) || 0));
     const pctNode = document.querySelector('#uploadPct');
     const bar = document.querySelector('#uploadBar');
+    const sentNode = document.querySelector('#uploadSent');
+    const speedNode = document.querySelector('#uploadSpeed');
+    const etaNode = document.querySelector('#uploadEta');
+    const channelsNode = document.querySelector('#uploadChannels');
     const status = document.querySelector('#uploadStatus');
     if (pctNode) pctNode.textContent = `${Math.floor(pct)}%`;
     if (bar) bar.style.width = `${pct}%`;
+    if (sentNode) sentNode.textContent = fmtBytes(bytes);
+    if (speedNode) speedNode.textContent = pct >= 100 ? 'เสร็จแล้ว' : (speed > 0 ? fmtRate(speed) : 'กำลังวัด');
+    if (etaNode) etaNode.textContent = pct >= 100 ? '—' : (eta > 0 ? fmtEta(eta) : 'กำลังคำนวณ');
+    if (channelsNode) channelsNode.textContent = concurrency > 0 ? String(concurrency) : '—';
     if (status) {
       const bits = [`${fmtBytes(bytes)} / ${fmtBytes(runtime.videoSize)}`];
       if (speed > 0) bits.push(fmtRate(speed));
