@@ -6,6 +6,10 @@ from pathlib import Path
 from urllib.parse import quote
 
 
+DIRECT_PAIR_MODE = "direct-separate-audio-v2"
+DIRECT_PAIR_CONTRACT_VERSION = 2
+
+
 class MediaPairError(RuntimeError):
     pass
 
@@ -43,6 +47,25 @@ def has_stream(input_url: str, selector: str, headers: str | None = None) -> boo
         return bool(run_capture(cmd).strip())
     except Exception:
         return False
+
+
+def direct_pair_manifest_compatible(manifest: dict) -> bool:
+    """Return True only for manifests that prove every source chunk has external audio muxed in."""
+    if str(manifest.get("mediaPairMode") or "") != DIRECT_PAIR_MODE:
+        return False
+    if int(manifest.get("pairContractVersion") or 0) < DIRECT_PAIR_CONTRACT_VERSION:
+        return False
+    if manifest.get("audioMuxed") is not True:
+        return False
+    chunks = list(manifest.get("chunks") or [])
+    if not chunks:
+        return False
+    return all(
+        str(chunk.get("mediaPairMode") or "") == DIRECT_PAIR_MODE
+        and int(chunk.get("pairContractVersion") or 0) >= DIRECT_PAIR_CONTRACT_VERSION
+        and chunk.get("audioMuxed") is True
+        for chunk in chunks
+    )
 
 
 def pair_ffmpeg_command(

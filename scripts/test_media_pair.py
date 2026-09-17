@@ -5,7 +5,14 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from media_pair import has_stream, mux_separate_audio, pair_ffmpeg_command
+from media_pair import (
+    DIRECT_PAIR_CONTRACT_VERSION,
+    DIRECT_PAIR_MODE,
+    direct_pair_manifest_compatible,
+    has_stream,
+    mux_separate_audio,
+    pair_ffmpeg_command,
+)
 
 
 def run(cmd: list[str]) -> None:
@@ -47,6 +54,30 @@ def main() -> None:
         assert paired.exists() and paired.stat().st_size > 0
         assert has_stream(paired.as_posix(), "v:0") is True
         assert has_stream(paired.as_posix(), "a:0") is True
+
+        stale = {
+            "mediaPairMode": "direct-separate-audio-v1",
+            "chunks": [{"index": 0, "key": "temp/job/source/chunk_00000.mkv"}],
+        }
+        assert direct_pair_manifest_compatible(stale) is False
+
+        current = {
+            "mediaPairMode": DIRECT_PAIR_MODE,
+            "pairContractVersion": DIRECT_PAIR_CONTRACT_VERSION,
+            "audioMuxed": True,
+            "chunks": [{
+                "index": 0,
+                "key": "temp/job/source/chunk_00000.mkv",
+                "mediaPairMode": DIRECT_PAIR_MODE,
+                "pairContractVersion": DIRECT_PAIR_CONTRACT_VERSION,
+                "audioMuxed": True,
+            }],
+        }
+        assert direct_pair_manifest_compatible(current) is True
+
+        incomplete = dict(current)
+        incomplete["chunks"] = [dict(current["chunks"][0], audioMuxed=False)]
+        assert direct_pair_manifest_compatible(incomplete) is False
 
     print("MEDIA_PAIR_ACCEPTANCE_PASS")
 

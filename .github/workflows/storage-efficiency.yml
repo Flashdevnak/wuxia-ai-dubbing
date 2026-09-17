@@ -4,12 +4,16 @@ on:
   pull_request:
     paths:
       - 'scripts/prepare_job_full.py'
+      - 'scripts/media_pair.py'
+      - 'scripts/test_media_pair.py'
       - 'src/worker-stability.js'
       - '.github/workflows/storage-efficiency.yml'
   push:
     branches: [main]
     paths:
       - 'scripts/prepare_job_full.py'
+      - 'scripts/media_pair.py'
+      - 'scripts/test_media_pair.py'
       - 'src/worker-stability.js'
       - '.github/workflows/storage-efficiency.yml'
   workflow_dispatch:
@@ -28,13 +32,16 @@ jobs:
 
       - name: Syntax checks
         run: |
-          python -m py_compile scripts/prepare_job_full.py
+          python -m py_compile scripts/prepare_job_full.py scripts/media_pair.py scripts/test_media_pair.py
           node --check src/worker-stability.js
 
       - name: Direct separate-audio storage contract
         run: |
-          grep -q 'DIRECT_PAIR_MODE = "direct-separate-audio-v1"' scripts/prepare_job_full.py
-          grep -q 'STORAGE_EFFICIENT_DIRECT_PAIR_PASS' scripts/prepare_job_full.py
+          grep -q 'DIRECT_PAIR_MODE = "direct-separate-audio-v2"' scripts/media_pair.py
+          grep -q 'DIRECT_PAIR_CONTRACT_VERSION = 2' scripts/media_pair.py
+          grep -q 'direct_pair_manifest_compatible' scripts/prepare_job_full.py
+          grep -q 'audioMuxed' scripts/prepare_job_full.py
+          grep -q 'STORAGE_EFFICIENT_DIRECT_PAIR_V2_PASS' scripts/prepare_job_full.py
           grep -q 'do not create temp/{job}/paired_source.mkv' scripts/prepare_job_full.py
           if grep -q 'mux_separate_audio' scripts/prepare_job_full.py; then
             echo 'prepare_job_full.py still imports or calls full-file muxing' >&2
