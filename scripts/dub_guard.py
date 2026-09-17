@@ -18,11 +18,14 @@ from voice_profiles import (
 )
 
 # R3 profile v6 adds glossary-aware translation cache, deterministic series
-# casting, timing rescue and strict chunk quality gates. Older checkpoints are
-# rebuilt automatically by dub_chunk.py when AUDIO_PROFILE_VERSION changes.
+# casting, timing rescue and strict chunk quality gates. Runtime reliability
+# guards below keep the same profile version so durable v6 chunks stay reusable.
 AUDIO_PROFILE_VERSION = 6
 MAX_TEMPO_RATIO = 1.18
 MAX_GAP_EXTENSION = 1.50
+MAX_TTS_CONCURRENCY = 2
+TTS_RETRY_DELAYS = (2.0, 5.0, 10.0)
+MAX_SIDECHAIN_RATIO = 20.0
 
 _original_translate = base.translate_texts
 _original_synthesize_many = base.synthesize_many
@@ -204,21 +207,53 @@ async def guarded_synthesize(text: str, voice_spec: str, destination: Path) -> N
     await synthesize_profile(text, voice_spec, destination)
 
 
+def _reset_failed_tts_plan(plan: dict) -> None:
+    plan['tts_ok'] = False
+    plan.pop('tts_error', None)
+    for key in ('mp3', 'wav'):
+        path = plan.get(key)
+        if isinstance(path, Path):
+            path.unlink(missing_ok=True)
+
+
 async def guarded_synthesize_many(plans: list[dict], concurrency: int = 4) -> None:
     if not plans:
         return
-    await _original_synthesize_many(plans, concurrency=concurrency)
-    failed = [p for p in plans if not p.get('tts_ok')]
-    if failed:
-        await asyncio.sleep(1.0)
+
+    # GitHub runs several chunks in parallel. Capping each chunk here prevents
+    # a burst of 16+ simultaneous Edge TTS sessions from dropping sentences.
+    initial_concurrency = max(1, min(int(concurrency or 1), MAX_TTS_CONCURRENCY))
+    await _original_synthesize_many(plans, concurrency=initial_concurrency)
+
+    for retry_number, delay in enumerate(TTS_RETRY_DELAYS, 1):
+        failed = [p for p in plans if not p.get('tts_ok')]
+        if not failed:
+            break
+        indexes = ', '.join(str(int(p.get('i', -1)) + 1) for p in failed[:8])
+        print(
+            f"TTS guard retry {retry_number}/{len(TTS_RETRY_DELAYS)} "
+            f"for {len(failed)} sentence(s): {indexes}",
+            flush=True,
+        )
+        for plan in failed:
+            _reset_failed_tts_plan(plan)
+        await asyncio.sleep(delay)
+        # Retry only missing sentences and serialize them to avoid another burst.
         await _original_synthesize_many(failed, concurrency=1)
+
     failed = [p for p in plans if not p.get('tts_ok')]
     if failed:
+        for plan in failed[:8]:
+            print(
+                f"TTS final failure sentence={int(plan.get('i', -1)) + 1}: "
+                f"{plan.get('tts_error', 'unknown error')}",
+                flush=True,
+            )
         indexes = ', '.join(str(int(p.get('i', -1)) + 1) for p in failed[:8])
         raise RuntimeError(
             'สร้างเสียงไทยไม่ครบทุกประโยค '
             f"(ประโยค {indexes}{'…' if len(failed) > 8 else ''}) "
-            'ระบบหยุดช่วงนี้เพื่อให้ลองใหม่แทนการปล่อยวิดีโอที่บทพูดหาย'
+            'ระบบลองซ้ำหลายรอบแล้วและหยุดเพื่อไม่ปล่อยวิดีโอที่บทพูดหาย'
         )
 
 
@@ -237,6 +272,20 @@ def guarded_choose_voice(voices: list[str], gap: float, speaker_mode: bool, stat
     return choose_profile_voice(voices, gap, speaker_mode, state)
 
 
+def _clamp_sidechain_ratio(graph: str) -> str:
+    pattern = re.compile(r"(sidechaincompress=[^;\]]*?\bratio=)([0-9]+(?:\.[0-9]+)?)")
+
+    def clamp(match: re.Match[str]) -> str:
+        try:
+            value = float(match.group(2))
+        except ValueError:
+            value = MAX_SIDECHAIN_RATIO
+        value = max(1.0, min(MAX_SIDECHAIN_RATIO, value))
+        return f"{match.group(1)}{value:g}"
+
+    return pattern.sub(clamp, graph)
+
+
 def guarded_run(cmd: list[str]) -> None:
     safe_cmd = list(cmd)
     try:
@@ -246,10 +295,13 @@ def guarded_run(cmd: list[str]) -> None:
             graph = graph.replace('volume=0.78[base]', 'volume=0.92[base]')
             graph = graph.replace(
                 'sidechaincompress=threshold=0.004:ratio=30:attack=2:release=180',
-                'sidechaincompress=threshold=0.002:ratio=30:attack=1:release=240',
+                'sidechaincompress=threshold=0.002:ratio=20:attack=1:release=240',
             )
             graph = graph.replace("weights='0.42 1.55'", "weights='0.62 1.55'")
-            safe_cmd[idx + 1] = graph
+        # FFmpeg 6.x sidechaincompress accepts ratio only in [1, 20].
+        # Clamp any future mix profile too, not only the current exact graph.
+        graph = _clamp_sidechain_ratio(graph)
+        safe_cmd[idx + 1] = graph
     except (ValueError, IndexError):
         pass
     _original_run(safe_cmd)
