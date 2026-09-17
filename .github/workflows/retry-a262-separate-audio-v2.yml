@@ -1,0 +1,71 @@
+name: Retry Separate Audio Job A262 V2
+
+on:
+  push:
+    branches: [codex/retry-a262-separate-audio-v2]
+    paths:
+      - '.github/workflows/retry-a262-separate-audio-v2.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  retry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      WORKER_URL: https://wuxia-ai-dubbing.26nak-testdev.workers.dev
+      WORKER_SHARED_TOKEN: ${{ secrets.WORKER_SHARED_TOKEN }}
+      GH_DISPATCH_TOKEN: ${{ secrets.GH_DISPATCH_TOKEN }}
+      JOB_ID: a262cec3-beb2-4e9b-a7a9-dac7a4fd40cd
+    steps:
+      - name: Validate retry secrets
+        run: |
+          test -n "$WORKER_SHARED_TOKEN" || (echo 'Missing WORKER_SHARED_TOKEN' && exit 1)
+          test -n "$GH_DISPATCH_TOKEN" || (echo 'Missing GH_DISPATCH_TOKEN' && exit 1)
+
+      - name: Reset failed job and dispatch repaired pipeline
+        run: |
+          set -euo pipefail
+
+          curl --fail --silent --show-error \
+            -X PATCH "$WORKER_URL/api/internal/jobs/$JOB_ID" \
+            -H "x-worker-token: $WORKER_SHARED_TOKEN" \
+            -H "content-type: application/json" \
+            --data '{"status":"queued","progress":1,"stage":"เริ่มใหม่ด้วย Separate Audio V2","error":null,"pauseRequested":false}' \
+            > reset.json
+
+          curl --fail --silent --show-error \
+            "$WORKER_URL/api/internal/jobs/$JOB_ID" \
+            -H "x-worker-token: $WORKER_SHARED_TOKEN" \
+            > current.json
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          current = json.loads(Path('current.json').read_text(encoding='utf-8'))
+          job = current.get('job') or {}
+          required = ['id', 'sourceKey', 'sourceAudioKey']
+          missing = [k for k in required if not str(job.get(k) or '').strip()]
+          if missing:
+              raise SystemExit('Job is missing required retry fields: ' + ', '.join(missing))
+          payload = {
+              'event_type': 'dubbing_job',
+              'client_payload': {
+                  'workerBase': 'https://wuxia-ai-dubbing.26nak-testdev.workers.dev',
+                  'job': job,
+              },
+          }
+          Path('dispatch.json').write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
+          print('JOB_READY_FOR_RETRY', job['id'], job.get('sourceKey'), job.get('sourceAudioKey'))
+          PY
+
+          curl --fail --silent --show-error \
+            -X POST "https://api.github.com/repos/Flashdevnak/wuxia-ai-dubbing/dispatches" \
+            -H "Authorization: Bearer $GH_DISPATCH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -H "content-type: application/json" \
+            --data-binary @dispatch.json
+
+          echo "RETRY_DISPATCHED_ON_REPAIRED_MAIN job=$JOB_ID"
