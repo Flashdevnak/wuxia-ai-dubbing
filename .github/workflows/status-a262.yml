@@ -1,0 +1,32 @@
+name: Status A262 Retry
+
+on:
+  push:
+    branches: [codex/retry-a262-separate-audio-v2]
+    paths:
+      - '.github/workflows/status-a262.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    env:
+      WORKER_URL: https://wuxia-ai-dubbing.26nak-testdev.workers.dev
+      WORKER_SHARED_TOKEN: ${{ secrets.WORKER_SHARED_TOKEN }}
+      JOB_ID: a262cec3-beb2-4e9b-a7a9-dac7a4fd40cd
+    steps:
+      - name: Read current worker job state
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error \
+            "$WORKER_URL/api/internal/jobs/$JOB_ID" \
+            -H "x-worker-token: $WORKER_SHARED_TOKEN" > job.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          j=(json.loads(Path('job.json').read_text()) or {}).get('job') or {}
+          view={k:j.get(k) for k in ['id','status','progress','stage','error','chunkDone','chunkTotal','runId','runAttempt','updatedAt']}
+          print('JOB_STATUS', json.dumps(view, ensure_ascii=False))
+          PY
