@@ -27,6 +27,7 @@ jobs:
           node --check public/studio-v2.js
           node --check public/upload-engine-v4.js
           node --check public/pair-recovery.js
+          node --check public/pair-retry-v2.js
           node --check src/worker.js
           node --check src/worker-safe.js
           node --check src/worker-full.js
@@ -34,6 +35,7 @@ jobs:
           node --check src/worker-fast.js
           node --check src/worker-pairfix.js
           node --check src/worker-stability.js
+          node --check src/worker-separate-audio-dispatch.js
           node --check src/storage.js
           node --check src/youtube.js
 
@@ -58,6 +60,7 @@ jobs:
         run: |
           test -f public/upload-engine-v4.js
           test -f src/worker-stability.js
+          test -f src/worker-separate-audio-dispatch.js
           grep -q "resilient-multipart-v4" public/upload-engine-v4.js
           grep -q "adaptive-mobile-v4" public/upload-engine-v4.js
           grep -q "NORMAL_STALL_MS = 18000" public/upload-engine-v4.js
@@ -69,7 +72,7 @@ jobs:
           grep -q "versionQueryRequired: false" src/worker-stability.js
           grep -q "upload-fast\\.js" src/worker-stability.js
           grep -q "mobile-upload-recovery\\.js" src/worker-stability.js
-          grep -q '"main": "src/worker-stability.js"' wrangler.jsonc
+          grep -q '"main": "src/worker-separate-audio-dispatch.js"' wrangler.jsonc
 
       - name: Separate Audio Pair Recovery contract
         run: node scripts/test_pair_recovery.mjs
@@ -121,6 +124,7 @@ jobs:
           test -f public/studio-v2.css
           test -f public/upload-engine-v4.js
           test -f public/pair-recovery.js
+          test -f public/pair-retry-v2.js
           test -f src/worker.js
           test -f src/worker-safe.js
           test -f src/worker-full.js
@@ -128,6 +132,7 @@ jobs:
           test -f src/worker-fast.js
           test -f src/worker-pairfix.js
           test -f src/worker-stability.js
+          test -f src/worker-separate-audio-dispatch.js
           test -f src/storage.js
           test -f src/youtube.js
           test -f wrangler.jsonc
@@ -156,7 +161,7 @@ jobs:
           grep -q "1:a:0" scripts/media_pair.py
           grep -q "MEDIA_PAIR_ACCEPTANCE_PASS" scripts/test_media_pair.py
           grep -q "ระบบไม่ส่งออกไฟล์ไทยที่ผิดภาษา" scripts/extract_transcript_job.py
-          grep -q '"main": "src/worker-stability.js"' wrangler.jsonc
+          grep -q '"main": "src/worker-separate-audio-dispatch.js"' wrangler.jsonc
           grep -q '"binding": "MEDIA_BUCKET"' wrangler.jsonc
           grep -q '"*/10 \* \* \* \*"' wrangler.jsonc
           grep -q "r3SmartStudio" src/worker-r3.js
@@ -171,6 +176,9 @@ jobs:
           grep -q "separateAudioPairRecovery" src/worker-pairfix.js
           grep -q "pair-recovery.js" src/worker-pairfix.js
           grep -q "sourceAudioKey" public/pair-recovery.js
+          grep -q "sourceAudioKey" src/worker-separate-audio-dispatch.js
+          grep -q "separateAudioPersistBeforeDispatch" src/worker-separate-audio-dispatch.js
+          grep -q "pair-retry-v2.js" src/worker-separate-audio-dispatch.js
           grep -q "uploadServerReconcile: true" src/worker-stability.js
           if grep -q "oauth2.googleapis.com" src/storage.js; then
             echo "Permanent Google Drive OAuth dependency is still present in storage.js" >&2
