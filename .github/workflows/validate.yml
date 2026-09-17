@@ -36,6 +36,7 @@ jobs:
           node --check src/worker-pairfix.js
           node --check src/worker-stability.js
           node --check src/worker-separate-audio-dispatch.js
+          node --check src/worker-translation-integrity.js
           node --check src/storage.js
           node --check src/youtube.js
 
@@ -61,6 +62,7 @@ jobs:
           test -f public/upload-engine-v4.js
           test -f src/worker-stability.js
           test -f src/worker-separate-audio-dispatch.js
+          test -f src/worker-translation-integrity.js
           grep -q "resilient-multipart-v4" public/upload-engine-v4.js
           grep -q "adaptive-mobile-v4" public/upload-engine-v4.js
           grep -q "NORMAL_STALL_MS = 18000" public/upload-engine-v4.js
@@ -72,7 +74,8 @@ jobs:
           grep -q "versionQueryRequired: false" src/worker-stability.js
           grep -q "upload-fast\\.js" src/worker-stability.js
           grep -q "mobile-upload-recovery\\.js" src/worker-stability.js
-          grep -q '"main": "src/worker-separate-audio-dispatch.js"' wrangler.jsonc
+          grep -q "./worker-separate-audio-dispatch.js" src/worker-translation-integrity.js
+          grep -q '"main": "src/worker-translation-integrity.js"' wrangler.jsonc
 
       - name: Separate Audio Pair Recovery contract
         run: node scripts/test_pair_recovery.mjs
@@ -87,6 +90,7 @@ jobs:
             scripts/test_media_pair.py \
             scripts/dub_chunk.py \
             scripts/dub_guard.py \
+            scripts/dub_guard_integrity.py \
             scripts/r3_studio.py \
             scripts/test_r3_studio.py \
             scripts/voice_profiles.py \
@@ -133,6 +137,7 @@ jobs:
           test -f src/worker-pairfix.js
           test -f src/worker-stability.js
           test -f src/worker-separate-audio-dispatch.js
+          test -f src/worker-translation-integrity.js
           test -f src/storage.js
           test -f src/youtube.js
           test -f wrangler.jsonc
@@ -141,6 +146,7 @@ jobs:
           test -f scripts/test_media_pair.py
           test -f scripts/test_pair_recovery.mjs
           test -f scripts/dub_guard.py
+          test -f scripts/dub_guard_integrity.py
           test -f scripts/r3_studio.py
           test -f scripts/voice_profiles.py
           test -f scripts/prepare_job_full.py
@@ -148,10 +154,12 @@ jobs:
           test -f .github/workflows/transcript.yml
           test -f .github/workflows/thai-media-smoke.yml
           test -f .github/workflows/deploy-cloudflare.yml
-          grep -q "python scripts/dub_guard.py" .github/workflows/dubbing.yml
+          grep -q "python scripts/dub_guard_integrity.py" .github/workflows/dubbing.yml
           grep -q "python scripts/prepare_job_full.py" .github/workflows/dubbing.yml
           grep -q "Noto Sans Thai" .github/workflows/dubbing.yml
           grep -q "AUDIO_PROFILE_VERSION = 6" scripts/dub_guard.py
+          grep -q "TRANSLATION_INTEGRITY_PROFILE = 7" scripts/dub_guard_integrity.py
+          grep -q "Translation Integrity Gate ไม่ผ่าน" scripts/dub_guard_integrity.py
           grep -q "R3 Quality Gate" scripts/dub_guard.py
           grep -q "translation cache HIT" scripts/dub_guard.py
           grep -q "auto-cast" scripts/voice_profiles.py
@@ -161,7 +169,8 @@ jobs:
           grep -q "1:a:0" scripts/media_pair.py
           grep -q "MEDIA_PAIR_ACCEPTANCE_PASS" scripts/test_media_pair.py
           grep -q "ระบบไม่ส่งออกไฟล์ไทยที่ผิดภาษา" scripts/extract_transcript_job.py
-          grep -q '"main": "src/worker-separate-audio-dispatch.js"' wrangler.jsonc
+          grep -q '"main": "src/worker-translation-integrity.js"' wrangler.jsonc
+          grep -q "./worker-separate-audio-dispatch.js" src/worker-translation-integrity.js
           grep -q '"binding": "MEDIA_BUCKET"' wrangler.jsonc
           grep -q '"*/10 \* \* \* \*"' wrangler.jsonc
           grep -q "r3SmartStudio" src/worker-r3.js
