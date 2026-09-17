@@ -33,7 +33,7 @@ jobs:
           fc-match "Noto Sans Thai" | head -n 1
 
       - name: Install lightweight TTS smoke dependencies
-        run: python -m pip install --disable-pip-version-check "edge-tts>=7.2.0,<8"
+        run: python -m pip install --disable-pip-version-check "edge-tts>=7.2.0,<8" "gTTS>=2.5.4,<3"
 
       - name: Generate real Thai voice-profile samples and recovery cases
         run: |
@@ -75,9 +75,8 @@ jobs:
               if not punctuation.exists() or punctuation.stat().st_size <= 0:
                   raise RuntimeError('Punctuation-only silence fallback failed')
 
-              # Reproduce the exact production failure class deterministically:
-              # the chosen styled profile returns no audio, but neutral settings
-              # on the same voice succeed. Recovery must happen automatically.
+              # Reproduce the styled-profile Edge failure deterministically:
+              # styled settings return no audio while neutral settings succeed.
               real_communicate = voice_profiles.edge_tts.Communicate
               calls = []
 
@@ -110,6 +109,44 @@ jobs:
                   print('deterministic no-audio recovery: OK', calls)
               finally:
                   voice_profiles.edge_tts.Communicate = real_communicate
+
+              # Reproduce the production 77% failure class: every Edge strategy
+              # fails. The independent provider must then produce real output
+              # instead of allowing one sentence to fail the whole chunk.
+              real_edge_save = voice_profiles._edge_save
+              real_fallback_specs = voice_profiles._fallback_voice_specs
+              real_gtts_save_sync = voice_profiles._gtts_save_sync
+              provider_calls = []
+
+              async def always_fail_edge(**kwargs):
+                  return RuntimeError('No audio was received. Please verify that your parameters are correct.')
+
+              async def no_edge_alternates(current_voice, current_gender):
+                  return []
+
+              def fake_gtts_save(text, lang, destination):
+                  provider_calls.append((text, lang))
+                  Path(destination).write_bytes(b'independent-provider-recovery-ok')
+
+              try:
+                  voice_profiles._edge_save = always_fail_edge
+                  voice_profiles._fallback_voice_specs = no_edge_alternates
+                  voice_profiles._gtts_save_sync = fake_gtts_save
+                  provider_recovered = Path('provider-recovery.mp3')
+                  await synthesize_profile(
+                      'ประโยคนี้จำลองกรณี Edge ไม่คืนเสียงทุกวิธี',
+                      selected['adult-female'],
+                      provider_recovered,
+                  )
+                  if not provider_recovered.exists() or provider_recovered.stat().st_size <= 0:
+                      raise RuntimeError('Independent provider recovery did not produce output')
+                  if not provider_calls or provider_calls[-1][1] != 'th':
+                      raise RuntimeError(f'gTTS provider fallback was not used as Thai: {provider_calls}')
+                  print('independent provider recovery: OK', provider_calls)
+              finally:
+                  voice_profiles._edge_save = real_edge_save
+                  voice_profiles._fallback_voice_specs = real_fallback_specs
+                  voice_profiles._gtts_save_sync = real_gtts_save_sync
 
           asyncio.run(main())
           PY
