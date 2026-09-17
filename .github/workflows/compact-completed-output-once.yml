@@ -1,0 +1,49 @@
+name: Compact Completed Output Once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/compact-current-output-v1.trigger'
+
+permissions:
+  contents: read
+
+jobs:
+  compact:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      WORKER_URL: https://wuxia-ai-dubbing.26nak-testdev.workers.dev
+      WORKER_SHARED_TOKEN: ${{ secrets.WORKER_SHARED_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Ensure ffmpeg
+        run: |
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y ffmpeg
+          fi
+          ffmpeg -version | head -n 1
+
+      - name: Install compact dependencies
+        run: pip install requests
+
+      - name: Read one-time job id
+        id: target
+        run: |
+          JOB_ID="$(tr -d '\r\n ' < .github/compact-current-output-v1.trigger)"
+          test -n "$JOB_ID"
+          echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Compact completed output safely
+        run: |
+          python scripts/compact_completed_output.py \
+            --job-id '${{ steps.target.outputs.job_id }}' \
+            --worker-url "$WORKER_URL" \
+            --token "$WORKER_SHARED_TOKEN"
