@@ -15,6 +15,7 @@ def main() -> None:
     dispatch_worker = dispatch_worker_path.read_text(encoding='utf-8') if dispatch_worker_path.exists() else ''
     ui = (root / 'public' / 'r3-studio.js').read_text(encoding='utf-8')
     guard = (root / 'scripts' / 'dub_guard.py').read_text(encoding='utf-8')
+    dubbing_workflow = (root / '.github' / 'workflows' / 'dubbing.yml').read_text(encoding='utf-8')
 
     direct_r3 = '"main": "src/worker-r3.js"' in wrangler
     wrapped_r3 = '"main": "src/worker-fast.js"' in wrangler and "import r3Worker from './worker-r3.js'" in fast_worker
@@ -64,9 +65,14 @@ def main() -> None:
         assert marker in ui, marker
     for marker in (
         'AUDIO_PROFILE_VERSION = 6', 'translation cache HIT', 'compact_thai',
-        'R3 Quality Gate', 'quota_estimate',
+        'R3 Quality Gate', 'quota_estimate', 'MAX_TTS_CONCURRENCY = 2',
+        'TTS_RETRY_DELAYS = (2.0, 5.0, 10.0)',
+        'sidechaincompress=threshold=0.002:ratio=20:attack=1:release=240',
+        '_clamp_sidechain_ratio', 'TTS guard retry',
     ):
         assert marker in guard, marker
+
+    assert 'max-parallel: 3' in dubbing_workflow
 
     print('R3 runtime integration acceptance: PASS')
 

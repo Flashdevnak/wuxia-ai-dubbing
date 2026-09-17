@@ -84,7 +84,9 @@ jobs:
     timeout-minutes: 360
     strategy:
       fail-fast: false
-      max-parallel: 4
+      # Keep aggregate Edge TTS pressure low enough that individual sentences
+      # can finish reliably; each chunk also caps its own TTS concurrency.
+      max-parallel: 3
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
     env:
       WORKER_URL: ${{ github.event.client_payload.workerBase || secrets.WORKER_URL }}
