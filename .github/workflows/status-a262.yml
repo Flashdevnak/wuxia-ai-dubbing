@@ -30,3 +30,4 @@ jobs:
           view={k:j.get(k) for k in ['id','status','progress','stage','error','chunkDone','chunkTotal','runId','runAttempt','updatedAt']}
           print('JOB_STATUS', json.dumps(view, ensure_ascii=False))
           PY
+          echo 'STATUS_CHECK=2'
