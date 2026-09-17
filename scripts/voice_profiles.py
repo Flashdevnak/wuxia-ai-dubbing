@@ -9,6 +9,7 @@ import unicodedata
 from pathlib import Path
 
 import edge_tts
+from gtts import gTTS
 
 
 PREFIX = "vp1:"
@@ -117,10 +118,10 @@ async def list_profile_voices(lang: str, mode: str, locale_map: dict[str, str]) 
 
 
 def normalize_tts_text(text: str) -> str:
-    """Normalize invisible/control-heavy translated text before Edge TTS.
+    """Normalize invisible/control-heavy translated text before TTS.
 
     The subtitle/translation itself is left untouched; this value is only used
-    for speech synthesis recovery when Edge returns no audio for a sentence.
+    for speech synthesis recovery when a provider cannot render a sentence.
     """
     value = unicodedata.normalize("NFKC", str(text or ""))
     cleaned: list[str] = []
@@ -138,7 +139,7 @@ def normalize_tts_text(text: str) -> str:
 
 def _plain_tts_text(text: str) -> str:
     # Last-resort speech text keeps letters/numbers from every Unicode script
-    # while dropping symbols that can occasionally break an Edge TTS request.
+    # while dropping symbols that can occasionally break a TTS request.
     value = normalize_tts_text(text)
     reduced = "".join(char if (char.isalnum() or char.isspace()) else " " for char in value)
     return re.sub(r"\s+", " ", reduced).strip()
@@ -192,7 +193,7 @@ async def _edge_save(
 
 
 async def _fallback_voice_specs(current_voice: str, current_gender: str) -> list[dict]:
-    """Return live locale-compatible voices, preferring the current gender."""
+    """Return live locale-compatible Edge voices, preferring current gender."""
     try:
         voices = await edge_tts.list_voices()
     except Exception as exc:
@@ -221,13 +222,51 @@ async def _fallback_voice_specs(current_voice: str, current_gender: str) -> list
     return specs
 
 
+def _gtts_language_for_voice(voice: str) -> str:
+    """Derive a gTTS language code from an Edge short voice name."""
+    pieces = [piece for piece in str(voice or "").split("-") if piece]
+    if not pieces:
+        return "th"
+    language = pieces[0].lower()
+    locale = "-".join(pieces[:2]).lower() if len(pieces) >= 2 else language
+    if locale == "zh-cn":
+        return "zh-CN"
+    if locale == "zh-tw":
+        return "zh-TW"
+    return language
+
+
+def _gtts_save_sync(text: str, lang: str, destination: Path) -> None:
+    destination.unlink(missing_ok=True)
+    speech = gTTS(text=text, lang=lang, slow=False)
+    speech.save(str(destination))
+    if not destination.exists() or destination.stat().st_size <= 0:
+        raise RuntimeError("gTTS returned empty audio")
+
+
+async def _gtts_save(text: str, lang: str, destination: Path, attempts: int = 2) -> Exception | None:
+    """Independent provider fallback used only after every Edge path fails."""
+    last: Exception | None = None
+    for attempt in range(1, max(1, attempts) + 1):
+        try:
+            await asyncio.to_thread(_gtts_save_sync, text, lang, destination)
+            return None
+        except Exception as exc:
+            last = exc
+            destination.unlink(missing_ok=True)
+            if attempt < attempts:
+                await asyncio.sleep(attempt * 1.5)
+    return last
+
+
 async def synthesize_profile(text: str, voice_spec: str, destination: Path) -> None:
-    """Synthesize speech with deterministic recovery for Edge `No audio` cases.
+    """Synthesize speech with provider-diverse recovery for `No audio` cases.
 
     Recovery order keeps the chosen actor whenever possible:
-    original profile -> normalized text -> neutral same voice -> live alternate
-    locale voice -> punctuation-stripped text. Punctuation-only segments become
-    a short silence because there is no spoken content to synthesize.
+    original Edge profile -> normalized text -> neutral same Edge voice -> live
+    alternate locale Edge voice -> punctuation-stripped Edge request -> gTTS as
+    an independent final provider. Punctuation-only segments become a short
+    silence because there is no spoken content to synthesize.
     """
     profile = decode_profile(voice_spec)
     if profile:
@@ -262,7 +301,7 @@ async def synthesize_profile(text: str, voice_spec: str, destination: Path) -> N
     if last is None:
         return
 
-    # Deterministic TTS recovery: retry a normalized request without changing
+    # Deterministic Edge recovery: retry a normalized request without changing
     # the actor first. This addresses invisible/control character failures.
     recovery_attempts: list[tuple[str, str, str, str, str, str]] = []
     if normalized_text != original_text:
@@ -313,7 +352,21 @@ async def synthesize_profile(text: str, voice_spec: str, destination: Path) -> N
             return
         last = error
 
-    raise RuntimeError(f"TTS failed after profile/text fallbacks: {last}")
+    # Do not let one provider outage or one Edge-rejected sentence kill a whole
+    # chunk. gTTS is intentionally rare: it runs only after every Edge strategy
+    # is exhausted, and downstream timing/mix/quality gates remain unchanged.
+    provider_text = plain_text or normalized_text
+    provider_lang = _gtts_language_for_voice(voice)
+    print(f"TTS provider fallback: gTTS lang={provider_lang}", flush=True)
+    provider_error = await _gtts_save(provider_text, provider_lang, destination, attempts=2)
+    if provider_error is None:
+        print("TTS provider fallback succeeded: gTTS", flush=True)
+        return
+
+    raise RuntimeError(
+        "TTS failed after all providers: "
+        f"Edge={last}; gTTS={provider_error}"
+    )
 
 
 def choose_profile_voice(voices: list[str], gap: float, speaker_mode: bool, state: dict) -> str:
