@@ -13,8 +13,12 @@ def main() -> None:
     stability_worker = stability_worker_path.read_text(encoding='utf-8') if stability_worker_path.exists() else ''
     dispatch_worker_path = root / 'src' / 'worker-separate-audio-dispatch.js'
     dispatch_worker = dispatch_worker_path.read_text(encoding='utf-8') if dispatch_worker_path.exists() else ''
+    integrity_worker_path = root / 'src' / 'worker-translation-integrity.js'
+    integrity_worker = integrity_worker_path.read_text(encoding='utf-8') if integrity_worker_path.exists() else ''
     ui = (root / 'public' / 'r3-studio.js').read_text(encoding='utf-8')
     guard = (root / 'scripts' / 'dub_guard.py').read_text(encoding='utf-8')
+    integrity_guard_path = root / 'scripts' / 'dub_guard_integrity.py'
+    integrity_guard = integrity_guard_path.read_text(encoding='utf-8') if integrity_guard_path.exists() else ''
     voice_profiles = (root / 'scripts' / 'voice_profiles.py').read_text(encoding='utf-8')
     dubbing_workflow = (root / '.github' / 'workflows' / 'dubbing.yml').read_text(encoding='utf-8')
 
@@ -38,20 +42,34 @@ def main() -> None:
         and "import fastWorker from './worker-fast.js'" in pair_worker
         and "import r3Worker from './worker-r3.js'" in fast_worker
     )
-    assert direct_r3 or wrapped_r3 or pair_wrapped_r3 or stability_wrapped_r3 or dispatch_wrapped_r3
+    integrity_wrapped_r3 = (
+        '"main": "src/worker-translation-integrity.js"' in wrangler
+        and "import innerWorker from './worker-separate-audio-dispatch.js'" in integrity_worker
+        and "import stabilityWorker from './worker-stability.js'" in dispatch_worker
+        and "import pairWorker from './worker-pairfix.js'" in stability_worker
+        and "import fastWorker from './worker-fast.js'" in pair_worker
+        and "import r3Worker from './worker-r3.js'" in fast_worker
+    )
+    assert direct_r3 or wrapped_r3 or pair_wrapped_r3 or stability_wrapped_r3 or dispatch_wrapped_r3 or integrity_wrapped_r3
 
-    if wrapped_r3 or pair_wrapped_r3 or stability_wrapped_r3 or dispatch_wrapped_r3:
+    if wrapped_r3 or pair_wrapped_r3 or stability_wrapped_r3 or dispatch_wrapped_r3 or integrity_wrapped_r3:
         for marker in ('uploadAcceleration', 'uploadConcurrencyMax'):
             assert marker in fast_worker, marker
-    if pair_wrapped_r3 or stability_wrapped_r3 or dispatch_wrapped_r3:
+    if pair_wrapped_r3 or stability_wrapped_r3 or dispatch_wrapped_r3 or integrity_wrapped_r3:
         for marker in ('separateAudioPairRecovery', 'pair-recovery.js', 'attach-audio'):
             assert marker in pair_worker, marker
-    if stability_wrapped_r3 or dispatch_wrapped_r3:
+    if stability_wrapped_r3 or dispatch_wrapped_r3 or integrity_wrapped_r3:
         for marker in ('resilient-multipart-v4', 'upload-engine-v4.js', 'uploadServerReconcile', 'versionQueryRequired'):
             assert marker in stability_worker, marker
-    if dispatch_wrapped_r3:
+    if dispatch_wrapped_r3 or integrity_wrapped_r3:
         for marker in ('sourceAudioKey', 'separateAudioPersistBeforeDispatch', 'pair-retry-v2.js'):
             assert marker in dispatch_worker, marker
+    if integrity_wrapped_r3:
+        for marker in ('translation-integrity-v1', 'prompt-or-json-leak', 'cjk-leak-in-thai'):
+            assert marker in integrity_worker, marker
+        for marker in ('TRANSLATION_INTEGRITY_PROFILE = 7', 'Translation Integrity Gate ไม่ผ่าน'):
+            assert marker in integrity_guard, marker
+        assert 'python scripts/dub_guard_integrity.py' in dubbing_workflow
 
     for marker in (
         'r3SmartStudio', '/api/r3/batch', '/repair', 'r3-studio.js',
@@ -80,8 +98,11 @@ def main() -> None:
     ):
         assert marker in voice_profiles, marker
 
-    # Keep v6 unchanged so successful chunks from a failed long job stay reusable.
+    # Base R3 remains v6; the integrity wrapper bumps durable output to v7 so
+    # v6 translations created by the permissive parser are rebuilt safely.
     assert 'AUDIO_PROFILE_VERSION = 6' in guard
+    if integrity_wrapped_r3:
+        assert 'TRANSLATION_INTEGRITY_PROFILE = 7' in integrity_guard
     assert 'max-parallel: 3' in dubbing_workflow
 
     print('R3 runtime integration acceptance: PASS')

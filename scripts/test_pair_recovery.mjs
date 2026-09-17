@@ -8,6 +8,9 @@ const stability = fs.existsSync('src/worker-stability.js') ? fs.readFileSync('sr
 const dispatchGuard = fs.existsSync('src/worker-separate-audio-dispatch.js')
   ? fs.readFileSync('src/worker-separate-audio-dispatch.js', 'utf8')
   : '';
+const integrityGuard = fs.existsSync('src/worker-translation-integrity.js')
+  ? fs.readFileSync('src/worker-translation-integrity.js', 'utf8')
+  : '';
 const wrangler = fs.readFileSync('wrangler.jsonc', 'utf8');
 
 assert.match(ui, /recoverPair/);
@@ -32,6 +35,13 @@ const stabilityPair = /src\/worker-stability\.js/.test(wrangler)
 const guardedPair = /src\/worker-separate-audio-dispatch\.js/.test(wrangler)
   && /import stabilityWorker from '\.\/worker-stability\.js'/.test(dispatchGuard)
   && /import pairWorker from '\.\/worker-pairfix\.js'/.test(stability);
-assert.ok(directPair || stabilityPair || guardedPair, 'pair recovery worker must be reachable from Wrangler entrypoint');
+const integrityGuardedPair = /src\/worker-translation-integrity\.js/.test(wrangler)
+  && /import innerWorker from '\.\/worker-separate-audio-dispatch\.js'/.test(integrityGuard)
+  && /import stabilityWorker from '\.\/worker-stability\.js'/.test(dispatchGuard)
+  && /import pairWorker from '\.\/worker-pairfix\.js'/.test(stability);
+assert.ok(
+  directPair || stabilityPair || guardedPair || integrityGuardedPair,
+  'pair recovery worker must be reachable from Wrangler entrypoint',
+);
 
 console.log('SEPARATE_AUDIO_PAIR_RECOVERY_PASS');

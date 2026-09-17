@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "wuxia-ai-dubbing",
-  "main": "src/worker-separate-audio-dispatch.js",
+  "main": "src/worker-translation-integrity.js",
   "compatibility_date": "2026-08-01",
   "assets": {
     "directory": "./public",

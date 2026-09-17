@@ -1,0 +1,70 @@
+name: Translation Integrity Acceptance
+
+on:
+  pull_request:
+    paths:
+      - 'src/worker-translation-integrity.js'
+      - 'scripts/dub_guard_integrity.py'
+      - '.github/workflows/dubbing.yml'
+      - 'wrangler.jsonc'
+      - '.github/workflows/translation-integrity.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/worker-translation-integrity.js'
+      - 'scripts/dub_guard_integrity.py'
+      - '.github/workflows/dubbing.yml'
+      - 'wrangler.jsonc'
+      - '.github/workflows/translation-integrity.yml'
+  workflow_dispatch:
+
+jobs:
+  translation-integrity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Syntax checks
+        run: |
+          node --check src/worker-translation-integrity.js
+          python -m py_compile scripts/dub_guard_integrity.py
+
+      - name: Worker translation response guard contract
+        run: |
+          grep -q "translation-integrity-v1" src/worker-translation-integrity.js
+          grep -q "prompt-or-json-leak" src/worker-translation-integrity.js
+          grep -q "cjk-leak-in-thai" src/worker-translation-integrity.js
+          grep -q "repetition-runaway" src/worker-translation-integrity.js
+          grep -q "translation integrity rejected unsafe model output" src/worker-translation-integrity.js
+          grep -q '"main": "src/worker-translation-integrity.js"' wrangler.jsonc
+
+      - name: Runner subtitle integrity guard contract
+        run: |
+          grep -q "TRANSLATION_INTEGRITY_PROFILE = 7" scripts/dub_guard_integrity.py
+          grep -q "prompt-or-json-leak" scripts/dub_guard_integrity.py
+          grep -q "cjk-leak-in-thai" scripts/dub_guard_integrity.py
+          grep -q "Translation Integrity Gate ไม่ผ่าน" scripts/dub_guard_integrity.py
+          grep -q "python scripts/dub_guard_integrity.py" .github/workflows/dubbing.yml
+          if grep -q "python scripts/dub_guard.py" .github/workflows/dubbing.yml; then
+            echo 'dubbing workflow still bypasses translation integrity guard' >&2
+            exit 1
+          fi
+
+      - name: Reject regression patterns from corrupted production subtitles
+        run: |
+          python - <<'PY'
+          import re
+
+          markers = ('{"translations"', '"sourceLanguage":', '"targetLanguage":', '"durationsSeconds":')
+          corrupt = '{"translations":["ทดสอบ"]} {"sourceLanguage":"zh","targetLanguage":"th","durationsSeconds":[1]}'
+          assert any(marker in corrupt for marker in markers)
+          assert re.search(r'[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]', 'ข้อความไทย 誰')
+          assert re.search(r'(.)\1{24,}', 'มา' + 'า' * 30)
+          print('TRANSLATION_INTEGRITY_ACCEPTANCE_PASS')
+          PY
