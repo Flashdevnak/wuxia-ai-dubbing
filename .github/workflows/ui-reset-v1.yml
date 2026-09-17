@@ -1,0 +1,52 @@
+name: UI Reset V1 Contract
+
+on:
+  pull_request:
+  push:
+    branches: [main, codex/ui-reset-v1]
+
+jobs:
+  ui-reset-v1:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Verify reset shell markers
+        run: |
+          set -euo pipefail
+          grep -q 'data-ui-reset="v1"' public/index.html
+          grep -q 'DUBBING BATTLEFIELD' public/index.html
+          grep -q 'SOURCE GATE' public/index.html
+          grep -q 'BATTLE QUEUE' public/index.html
+          grep -q 'ARMORY' public/index.html
+          grep -q 'SUPPLY VAULT' public/index.html
+          grep -q 'energy-gate' public/index.html
+          grep -q 'resource-board' public/index.html
+      - name: Block legacy shell regression
+        run: |
+          set -euo pipefail
+          if grep -Eq 'studio-header|mission-banner|storage-summary-grid' public/index.html; then
+            echo 'Legacy UI shell returned' >&2
+            exit 1
+          fi
+          if grep -q 'overflow-x:auto' public/studio-v2.css; then
+            echo 'Horizontal scrolling rule returned to Reset V1 CSS' >&2
+            exit 1
+          fi
+      - name: Verify mobile-safe presentation contract
+        run: |
+          set -euo pipefail
+          grep -q 'overflow-x:clip' public/studio-v2.css
+          grep -q '@media (max-width:430px)' public/studio-v2.css
+          grep -q '@media (max-width:360px)' public/studio-v2.css
+          grep -q 'grid-template-columns:repeat(4,minmax(0,1fr))' public/studio-v2.css
+          grep -q 'prefers-reduced-motion:reduce' public/studio-v2.css
+      - name: Verify lightweight battle effects
+        run: |
+          set -euo pipefail
+          grep -q '@keyframes gateFlame' public/studio-v2.css
+          grep -q '@keyframes emberFlow' public/studio-v2.css
+          grep -q '@keyframes flamePulse' public/studio-v2.css
+          if grep -Eqi '<video[^>]+autoplay|canvas|webgl' public/index.html; then
+            echo 'Heavy visual runtime added to UI Reset V1' >&2
+            exit 1
+          fi
