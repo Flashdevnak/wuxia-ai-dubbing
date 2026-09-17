@@ -7,12 +7,16 @@ import time
 from pathlib import Path
 
 import prepare_job as base
-from media_pair import has_stream, internal_file_url, worker_headers
+from media_pair import (
+    DIRECT_PAIR_CONTRACT_VERSION,
+    DIRECT_PAIR_MODE,
+    direct_pair_manifest_compatible,
+    has_stream,
+    internal_file_url,
+    worker_headers,
+)
 from worker_client import WorkerClient
 from youtube_transcript import extract_youtube_transcript, slice_entries
-
-
-DIRECT_PAIR_MODE = "direct-separate-audio-v1"
 
 
 def arg_value(name: str, default: str | None = None) -> str:
@@ -113,12 +117,21 @@ def _recover_completed_dub_chunks(client: WorkerClient, job: dict, github_output
         "duration": float(job.get("duration") or 0),
         "total": total,
         "chunks": [
-            {"index": i, "key": f"temp/{job_id}/source/chunk_{i:05d}.mkv", "size": 0}
+            {
+                "index": i,
+                "key": f"temp/{job_id}/source/chunk_{i:05d}.mkv",
+                "size": 0,
+                "mediaPairMode": DIRECT_PAIR_MODE,
+                "pairContractVersion": DIRECT_PAIR_CONTRACT_VERSION,
+                "audioMuxed": True,
+            }
             for i in range(total)
         ],
         "sourceLang": job.get("sourceLang", "auto"),
         "targetLang": job.get("targetLang", "th"),
         "mediaPairMode": DIRECT_PAIR_MODE,
+        "pairContractVersion": DIRECT_PAIR_CONTRACT_VERSION,
+        "audioMuxed": True,
         "storageEfficient": True,
         "recoveredWithoutOriginals": True,
     }
@@ -141,9 +154,13 @@ def _reuse_prepared_manifest(client: WorkerClient, job: dict, manifest_key: str,
     try:
         client.download(manifest_key, manifest_path)
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        chunks = list(manifest.get("chunks") or [])
-        if not chunks:
+        if not direct_pair_manifest_compatible(manifest):
+            print(
+                "Ignoring stale direct-pair manifest: external audio is not proven in every source chunk; rebuilding",
+                flush=True,
+            )
             return None
+        chunks = list(manifest.get("chunks") or [])
         for chunk in chunks:
             index = int(chunk.get("index") or 0)
             source_key = str(chunk.get("key") or "")
@@ -229,7 +246,7 @@ def prepare_separate_audio_direct() -> bool:
             duration=float(previous.get("duration") or 0),
             chunkTotal=total,
         )
-        print(f"Reusing direct-pair manifest with {total} chunks", flush=True)
+        print(f"Reusing direct-pair V2 manifest with {total} audio-muxed chunks", flush=True)
         base.emit_outputs(previous, github_output)
         return True
 
@@ -260,7 +277,7 @@ def prepare_separate_audio_direct() -> bool:
     ]
 
     client.patch_job(job_id, status="processing", progress=4, stage="กำลังแบ่งวิดีโอและเสียงโดยตรง ไม่สร้างไฟล์ซ้ำทั้งเรื่อง")
-    print("Starting direct separate-audio segmenter; paired_source.mkv is intentionally not created", flush=True)
+    print("Starting direct separate-audio V2 segmenter; paired_source.mkv is intentionally not created", flush=True)
     proc = subprocess.Popen(cmd)
     uploaded: list[dict] = []
     next_index = 0
@@ -277,9 +294,13 @@ def prepare_separate_audio_direct() -> bool:
             size = current.stat().st_size
             if size <= 0:
                 return
+            if not has_stream(str(current), "v:0") or not has_stream(str(current), "a:0"):
+                raise RuntimeError(
+                    f"Direct-pair V2 source chunk {next_index} is missing video or external audio; refusing to cache it"
+                )
 
             key = f"temp/{job_id}/source/chunk_{next_index:05d}.mkv"
-            print(f"Uploading direct-pair source chunk {next_index}: {size} bytes", flush=True)
+            print(f"Uploading audio-muxed direct-pair V2 source chunk {next_index}: {size} bytes", flush=True)
             client.upload(current, key, "video/x-matroska")
             chunk_duration = base.probe_duration(str(current))
             if chunk_duration <= 0:
@@ -292,6 +313,8 @@ def prepare_separate_audio_direct() -> bool:
                 "start": chunk_start,
                 "duration": chunk_duration,
                 "mediaPairMode": DIRECT_PAIR_MODE,
+                "pairContractVersion": DIRECT_PAIR_CONTRACT_VERSION,
+                "audioMuxed": True,
             }
 
             if transcript_data:
@@ -346,8 +369,12 @@ def prepare_separate_audio_direct() -> bool:
         "keepMusic": bool(job.get("keepMusic", True)),
         "speakerSeparation": bool(job.get("speakerSeparation", False)),
         "mediaPairMode": DIRECT_PAIR_MODE,
+        "pairContractVersion": DIRECT_PAIR_CONTRACT_VERSION,
+        "audioMuxed": True,
         "storageEfficient": True,
     }
+    if not direct_pair_manifest_compatible(manifest):
+        fail(client, job_id, "ตรวจสอบ manifest วิดีโอ+เสียงแยกไม่ผ่าน กรุณาลองใหม่")
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     client.upload(manifest_path, manifest_key, "application/json")
     client.patch_job(
@@ -358,7 +385,7 @@ def prepare_separate_audio_direct() -> bool:
         duration=duration,
         chunkTotal=total,
     )
-    print(f"STORAGE_EFFICIENT_DIRECT_PAIR_PASS chunks={total} no_full_pair_copy=true", flush=True)
+    print(f"STORAGE_EFFICIENT_DIRECT_PAIR_V2_PASS chunks={total} audio_muxed=true no_full_pair_copy=true", flush=True)
     base.emit_outputs(manifest, github_output)
     return True
 
