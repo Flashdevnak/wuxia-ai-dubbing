@@ -1,4 +1,4 @@
-name: Status A262 Retry
+name: Verify A262 Dub Progress
 
 on:
   push:
@@ -12,22 +12,40 @@ permissions:
 jobs:
   status:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     env:
       WORKER_URL: https://wuxia-ai-dubbing.26nak-testdev.workers.dev
       WORKER_SHARED_TOKEN: ${{ secrets.WORKER_SHARED_TOKEN }}
       JOB_ID: a262cec3-beb2-4e9b-a7a9-dac7a4fd40cd
     steps:
-      - name: Read current worker job state
+      - name: Poll worker until Dub advances beyond old audio-stream failure
         run: |
           set -euo pipefail
-          curl --fail --silent --show-error \
-            "$WORKER_URL/api/internal/jobs/$JOB_ID" \
-            -H "x-worker-token: $WORKER_SHARED_TOKEN" > job.json
-          python - <<'PY'
+          for n in $(seq 1 18); do
+            curl --fail --silent --show-error \
+              "$WORKER_URL/api/internal/jobs/$JOB_ID" \
+              -H "x-worker-token: $WORKER_SHARED_TOKEN" > job.json
+            python - <<'PY'
           import json
           from pathlib import Path
           j=(json.loads(Path('job.json').read_text()) or {}).get('job') or {}
           view={k:j.get(k) for k in ['id','status','progress','stage','error','chunkDone','chunkTotal','runId','runAttempt','updatedAt']}
-          print('JOB_STATUS', json.dumps(view, ensure_ascii=False))
+          print('JOB_STATUS', json.dumps(view, ensure_ascii=False), flush=True)
+          if j.get('error'):
+              raise SystemExit(20)
+          stage=str(j.get('stage') or '')
+          if any(x in stage for x in ['ถอดเสียงช่วง','แปลช่วง','สร้างเสียงช่วง','ผสมเสียงช่วง']):
+              raise SystemExit(10)
           PY
-          echo 'STATUS_CHECK=3'
+            rc=$?
+            if [ "$rc" = "10" ]; then
+              echo 'DUB_AUDIO_GUARD_PASSED=true'
+              exit 0
+            elif [ "$rc" = "20" ]; then
+              echo 'JOB_FAILED_DURING_DUB=true' >&2
+              exit 1
+            fi
+            sleep 10
+          done
+          echo 'Dub did not advance within verification window' >&2
+          exit 2
