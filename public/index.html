@@ -1,65 +1,108 @@
 <!doctype html>
-<html lang="th">
+<html lang="th" data-ui-reset="v1">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#111214" />
+  <meta name="theme-color" content="#090a0c" />
   <meta http-equiv="cache-control" content="no-cache, no-store, must-revalidate" />
   <title>ยุทธภพ สตูดิโอพากย์ไทย</title>
   <link rel="stylesheet" href="./studio-v2.css" />
 </head>
 <body>
-  <div class="studio-app">
-    <header class="studio-header">
-      <div class="studio-brand" aria-label="ยุทธภพ สตูดิโอ">
-        <strong>ยุทธภพ สตูดิโอ</strong>
-        <span>Thai Dubbing Command Deck</span>
-      </div>
-      <nav class="studio-nav" id="sidebar" aria-label="เมนูหลัก">
-        <button class="nav-item active" data-page="home" type="button"><span>01</span><b>สร้างงาน</b></button>
-        <button class="nav-item" data-page="jobs" type="button"><span>02</span><b>งานพากย์</b></button>
-        <button class="nav-item" data-page="files" type="button"><span>03</span><b>ไฟล์</b></button>
-        <button class="nav-item" data-page="storage" type="button"><span>04</span><b>พื้นที่</b></button>
+  <div class="arena-app">
+    <header class="arena-topbar">
+      <a class="arena-brand" href="#" aria-label="ยุทธภพ สตูดิโอ">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-copy"><strong>ยุทธภพ</strong><small>THAI DUBBING ARENA</small></span>
+      </a>
+
+      <nav class="arena-nav studio-nav" id="sidebar" aria-label="เมนูหลัก">
+        <button class="nav-item active" data-page="home" type="button"><span>สนาม</span><b>สร้างงาน</b></button>
+        <button class="nav-item" data-page="jobs" type="button"><span>ศึก</span><b>งานพากย์</b></button>
+        <button class="nav-item" data-page="files" type="button"><span>คลัง</span><b>ไฟล์</b></button>
+        <button class="nav-item" data-page="storage" type="button"><span>เสบียง</span><b>พื้นที่</b></button>
       </nav>
-      <div class="studio-head-tools">
-        <div class="head-storage" aria-label="พื้นที่ใช้งาน"><span>Workspace</span><b id="topStorage">0.00 GB / 8 GB</b><i aria-hidden="true"><em id="topStorageBar"></em></i></div>
-        <span id="deployMode" class="system-pill">ระบบพร้อม</span>
-        <button id="refreshBtn" class="plain-icon-btn" type="button">รีเฟรช</button>
+
+      <div class="arena-tools">
+        <div class="resource-mini" aria-label="พื้นที่ใช้งาน">
+          <span>R2 WORKSPACE</span>
+          <b id="topStorage">0.00 GB / 8 GB</b>
+          <i aria-hidden="true"><em id="topStorageBar"></em></i>
+        </div>
+        <span id="deployMode" class="system-beacon">พร้อม</span>
+        <button id="refreshBtn" class="refresh-control" type="button">รีเฟรช</button>
       </div>
     </header>
 
-    <main class="studio-main">
+    <main class="arena-main">
       <section class="page active" data-page-panel="home">
-        <div class="mission-banner">
-          <div class="mission-copy"><span class="page-kicker">COMMAND DECK</span><h1>สร้างงานพากย์ไทย</h1><p>เตรียมไฟล์ · ตั้งค่าพากย์ · เริ่มงาน · ติดตามผล ในหน้าจอเดียว</p></div>
-          <div class="mission-pipeline" aria-label="Pipeline"><span class="mission-step current">Upload</span><i></i><span class="mission-step">Prepare</span><i></i><span class="mission-step">Transcribe</span><i></i><span class="mission-step">Translate</span><i></i><span class="mission-step">Dub</span><i></i><span class="mission-step">Mix</span><i></i><span class="mission-step">QC</span></div>
-          <div class="mission-health" aria-label="ความพร้อมระบบ"><span><i></i> Multipart</span><span>Recovery</span><span>R3</span></div>
-        </div>
+        <section class="battle-hero" aria-labelledby="createTitle">
+          <div class="battle-hero-copy">
+            <span class="arena-kicker">DUBBING BATTLEFIELD</span>
+            <h1 id="createTitle">สนามสร้างเสียงพากย์ไทย</h1>
+            <p>ส่งต้นฉบับเข้าสนาม ตั้งกลยุทธ์ แล้วติดตามทุกช่วงตั้งแต่ Upload จนถึง Quality Check</p>
+          </div>
+          <div class="battle-pipeline" aria-label="ขั้นตอนงาน">
+            <span class="battle-step current"><i></i><b>Upload</b></span>
+            <span class="battle-step"><i></i><b>Prepare</b></span>
+            <span class="battle-step"><i></i><b>Transcribe</b></span>
+            <span class="battle-step"><i></i><b>Translate</b></span>
+            <span class="battle-step"><i></i><b>Dub</b></span>
+            <span class="battle-step"><i></i><b>Mix</b></span>
+            <span class="battle-step"><i></i><b>QC</b></span>
+          </div>
+        </section>
 
-        <div class="command-workbench create-panel create-workspace">
-          <section class="deck source-deck">
-            <div class="deck-head"><div><span class="section-eyebrow">SOURCE BAY</span><h2>ต้นฉบับและข้อมูลโปรเจกต์</h2></div><small>ไฟล์ใหญ่ 1–2 GB+ · resumable · separate audio</small></div>
-            <div class="project-strip"><div id="projectSlot" class="project-slot"><div class="slot-loading">กำลังเตรียมข้อมูลโปรเจกต์</div></div></div>
-            <div class="source-toolbar">
+        <div class="arena-layout create-panel create-workspace command-workbench">
+          <section class="arena-zone source-zone source-deck media-card">
+            <header class="zone-head">
+              <div><span class="zone-index">01</span><span class="zone-label">SOURCE GATE</span><h2>ต้นฉบับเข้าสู่สนาม</h2></div>
+              <p>รองรับวิดีโอใหญ่, resumable upload และเสียงแยก</p>
+            </header>
+
+            <div class="project-console">
+              <div class="console-label">PROJECT IDENTITY</div>
+              <div id="projectSlot" class="project-slot"><div class="slot-loading">กำลังเตรียมข้อมูลโปรเจกต์</div></div>
+            </div>
+
+            <div class="source-command-row">
               <div class="source-switch" role="group" aria-label="แหล่งวิดีโอ">
-                <button class="source-card primary-source selected" id="uploadCard" type="button"><b>ไฟล์จากเครื่อง</b><small>สำหรับงานจริง</small></button>
-                <button class="source-card secondary-source" id="linkCard" type="button"><b>YouTube</b><small>โหมดทดลอง / HAR</small></button>
+                <button class="source-card selected" id="uploadCard" type="button"><span>LOCAL</span><b>ไฟล์จากเครื่อง</b><small>เส้นทางหลักสำหรับงานจริง</small></button>
+                <button class="source-card" id="linkCard" type="button"><span>LINK</span><b>YouTube</b><small>โหมดทดลอง / HAR</small></button>
               </div>
-              <div class="media-readiness" aria-label="ความพร้อมไฟล์"><div><span>VIDEO</span><b id="videoReadyState">ยังไม่ได้เลือก</b></div><div><span>AUDIO</span><b id="audioReadyState">ใช้เสียงในวิดีโอ</b></div></div>
+              <div class="readiness-board" aria-label="ความพร้อมไฟล์">
+                <div><span>VIDEO</span><b id="videoReadyState">ยังไม่ได้เลือก</b></div>
+                <div><span>AUDIO</span><b id="audioReadyState">ใช้เสียงในวิดีโอ</b></div>
+              </div>
             </div>
 
             <div class="source-box">
               <div id="fileInputWrap" class="file-drop">
                 <input id="fileInput" type="file" />
-                <label for="fileInput" class="file-picker"><span class="picker-action">เลือกวิดีโอ</span><span class="picker-copy"><b>วางต้นฉบับเข้าสู่ Source Bay</b><small>MP4, MOV, MKV, WEBM, AVI, M4V · multipart resumable upload</small></span></label>
+                <label for="fileInput" class="energy-gate">
+                  <span class="gate-core" aria-hidden="true"><i></i></span>
+                  <span class="gate-copy"><b>เลือกวิดีโอเข้าสู่สนาม</b><small>MP4, MOV, MKV, WEBM, AVI, M4V · multipart resumable upload</small></span>
+                  <span class="gate-action">เลือกไฟล์</span>
+                </label>
+
                 <div id="fileMeta" class="file-meta-card hidden"></div>
-                <div id="uploadProgress" class="upload-progress hidden" aria-live="polite">
-                  <div class="upload-progress-top"><div class="upload-file-copy"><span>ENERGY UPLOAD</span><b id="uploadName">กำลังเตรียมไฟล์</b></div><strong id="uploadPct">0%</strong></div>
-                  <div class="progress-track battle-energy" aria-hidden="true"><i id="uploadBar"></i></div>
-                  <div class="upload-metrics" aria-label="ข้อมูลการอัปโหลด"><div><small>ส่งแล้ว</small><b id="uploadSent">0 MB</b></div><div><small>ความเร็ว</small><b id="uploadSpeed">กำลังวัด</b></div><div><small>เวลาที่เหลือ</small><b id="uploadEta">—</b></div><div><small>ช่องทาง</small><b id="uploadChannels">—</b></div></div>
+
+                <section id="uploadProgress" class="upload-progress hidden" aria-live="polite">
+                  <div class="upload-progress-top">
+                    <div class="upload-file-copy"><span>CHARGE SEQUENCE</span><b id="uploadName">กำลังเตรียมไฟล์</b></div>
+                    <strong id="uploadPct">0%</strong>
+                  </div>
+                  <div class="progress-track battle-energy"><i id="uploadBar"></i></div>
+                  <div class="upload-metrics" aria-label="ข้อมูลการอัปโหลด">
+                    <div><small>ส่งแล้ว</small><b id="uploadSent">0 MB</b></div>
+                    <div><small>ความเร็ว</small><b id="uploadSpeed">กำลังวัด</b></div>
+                    <div><small>เวลาที่เหลือ</small><b id="uploadEta">—</b></div>
+                    <div><small>ช่องทาง</small><b id="uploadChannels">—</b></div>
+                  </div>
                   <div class="upload-state-row"><span class="upload-state" id="uploadState"><i></i><b id="uploadStateLabel">กำลังเตรียม</b></span><span id="uploadStatus">กำลังเตรียมไฟล์</span></div>
-                </div>
+                </section>
               </div>
+
               <div id="linkInputWrap" class="link-workspace hidden">
                 <label class="field-label" for="videoUrl">ลิงก์ YouTube</label>
                 <div class="input-row"><input id="videoUrl" type="url" inputmode="url" autocomplete="off" placeholder="วางลิงก์ YouTube" /><button id="analyzeLinkBtn" class="btn ghost" type="button">ดึงคำบรรยาย</button></div>
@@ -68,37 +111,93 @@
             </div>
           </section>
 
-          <section class="deck control-deck">
-            <div class="deck-head"><div><span class="section-eyebrow">DUB CONTROL</span><h2>ควบคุมการพากย์</h2></div><small>ตั้งค่าหลักก่อนส่งเข้าระบบ</small></div>
+          <aside class="arena-zone tactics-zone control-deck">
+            <header class="zone-head compact">
+              <div><span class="zone-index">02</span><span class="zone-label">TACTICS</span><h2>ตั้งกลยุทธ์พากย์</h2></div>
+            </header>
+
             <div class="option-grid">
-              <label><span>ภาษาต้นฉบับ</span><select id="sourceLang"></select></label><label><span>ภาษาพากย์</span><select id="targetLang"></select></label>
+              <label><span>ภาษาต้นฉบับ</span><select id="sourceLang"></select></label>
+              <label><span>ภาษาพากย์</span><select id="targetLang"></select></label>
               <label><span>เสียงพากย์</span><select id="voiceMode"><option value="auto">เลือกอัตโนมัติ</option><option value="male">ผู้ชาย</option><option value="female">ผู้หญิง</option><option value="narrator">ผู้บรรยาย</option></select></label>
               <label><span>Processing</span><select id="processingMode"><option value="fast" selected>เร็ว</option><option value="balanced">สมดุล</option><option value="quality">คุณภาพสูง</option></select></label>
             </div>
-            <div class="speed-note" id="speedNote"><b>โหมดเร็ว</b><span>แบ่งงานเป็นช่วงและประมวลผลพร้อมกัน</span></div>
-            <div class="toggle-list"><label class="toggle"><input id="subtitles" type="checkbox" checked /><span></span><b>สร้างคำบรรยายไทย</b></label><label class="toggle"><input id="keepMusic" type="checkbox" checked /><span></span><b>เก็บเพลงและเสียงประกอบ</b></label><label class="toggle"><input id="autoCleanup" type="checkbox" checked /><span></span><b>ลบไฟล์ชั่วคราวเมื่อปลอดภัย</b></label></div>
-            <details class="advanced-settings compact-details"><summary>ตั้งค่าขั้นสูง</summary><label class="toggle"><input id="speakerSep" type="checkbox" /><span></span><b>แยกเสียงตามผู้พูดเมื่อระบบตรวจจับได้</b></label></details>
-            <div class="launch-command"><div class="launch-safety"><span>SERVER CHECK</span><b>ตรวจไฟล์จริงก่อนเริ่มทุกครั้ง</b></div><button id="startBtn" class="btn primary start-button" type="button"><b>เริ่มงานพากย์</b><small>ส่งงานเข้าสู่ pipeline</small></button><div id="message" class="message sr-only" role="status" aria-live="polite"></div></div>
-          </section>
 
-          <section class="activity-deck"><div class="activity-head"><div><span class="page-kicker">LIVE MISSION LOG</span><h2>งานล่าสุด</h2></div><button id="seeJobs" class="text-btn" type="button">เปิดรายการทั้งหมด</button></div><div id="homeJobs" class="job-list compact-jobs empty-state">ยังไม่มีงานพากย์</div></section>
+            <div class="speed-note" id="speedNote"><b>โหมดเร็ว</b><span>แบ่งงานเป็นช่วงและประมวลผลพร้อมกัน</span></div>
+
+            <div class="toggle-list">
+              <label class="toggle"><input id="subtitles" type="checkbox" checked /><span></span><b>สร้างคำบรรยายไทย</b></label>
+              <label class="toggle"><input id="keepMusic" type="checkbox" checked /><span></span><b>เก็บเพลงและเสียงประกอบ</b></label>
+              <label class="toggle"><input id="autoCleanup" type="checkbox" checked /><span></span><b>ลบไฟล์ชั่วคราวเมื่อปลอดภัย</b></label>
+            </div>
+            <details class="advanced-settings compact-details"><summary>ตั้งค่าขั้นสูง</summary><label class="toggle"><input id="speakerSep" type="checkbox" /><span></span><b>แยกเสียงตามผู้พูดเมื่อระบบตรวจจับได้</b></label></details>
+
+            <div class="launch-command">
+              <div class="launch-safety"><span>SERVER CHECK</span><b>ตรวจไฟล์จริงก่อนเริ่มทุกครั้ง</b></div>
+              <button id="startBtn" class="btn primary start-button" type="button"><span>ENGAGE</span><b>เริ่มงานพากย์</b><small>ส่งงานเข้าสู่ pipeline</small></button>
+              <div id="message" class="message sr-only" role="status" aria-live="polite"></div>
+            </div>
+          </aside>
+
+          <section class="mission-log activity-deck">
+            <header class="mission-log-head activity-head"><div><span class="arena-kicker">LIVE BATTLE QUEUE</span><h2>การต่อสู้ล่าสุด</h2></div><button id="seeJobs" class="text-btn" type="button">ดูทั้งหมด</button></header>
+            <div id="homeJobs" class="job-list compact-jobs empty-state">ยังไม่มีงานพากย์</div>
+          </section>
         </div>
       </section>
 
-      <section class="page" data-page-panel="jobs"><div class="page-head"><div><span class="page-kicker">JOBS</span><h1>งานพากย์</h1><p>ติดตาม progress, phase, error และ action ของทุกงาน</p></div></div><div id="jobsList" class="job-list empty-state">ยังไม่มีงาน</div></section>
-      <section class="page" data-page-panel="files"><div class="page-head"><div><span class="page-kicker">FILES</span><h1>ไฟล์</h1><p>ต้นฉบับและผลลัพธ์ที่อยู่ใน workspace</p></div></div><div class="files-grid"><section class="list-panel"><div class="list-panel-head"><h2>Uploads</h2><span>ต้นฉบับ</span></div><div id="filesList" class="file-list empty-state">ยังไม่มีไฟล์</div></section><section class="list-panel"><div class="list-panel-head"><h2>Outputs</h2><span>ไฟล์พร้อมดาวน์โหลด</span></div><div id="resultsList" class="file-list empty-state">ยังไม่มีไฟล์</div></section></div></section>
+      <section class="page" data-page-panel="jobs">
+        <header class="page-hero"><span class="arena-kicker">BATTLE QUEUE</span><h1>สนามงานพากย์</h1><p>แต่ละงานคือหนึ่งภารกิจ ติดตาม phase, progress, error และคำสั่งแก้ไขจากที่นี่</p></header>
+        <div id="jobsList" class="job-list full-battle-list empty-state">ยังไม่มีงาน</div>
+      </section>
+
+      <section class="page" data-page-panel="files">
+        <header class="page-hero"><span class="arena-kicker">ARMORY</span><h1>คลังไฟล์</h1><p>ต้นฉบับและผลลัพธ์ทั้งหมด แยกชัดเจนและพร้อมจัดการ</p></header>
+        <div class="armory-layout">
+          <section class="armory-lane"><header><span>INPUT</span><h2>ต้นฉบับ</h2></header><div id="filesList" class="file-list empty-state">ยังไม่มีไฟล์</div></section>
+          <section class="armory-lane"><header><span>OUTPUT</span><h2>ผลลัพธ์</h2></header><div id="resultsList" class="file-list empty-state">ยังไม่มีไฟล์</div></section>
+        </div>
+      </section>
+
       <section class="page" data-page-panel="storage">
-        <div class="page-head"><div><span class="page-kicker">STORAGE</span><h1>พื้นที่ใช้งาน</h1><p>Workspace budget 8 GB ของแอป ไม่ใช่ quota เพิ่มของ Cloudflare R2</p></div></div>
-        <div class="storage-summary-grid"><div class="storage-stat"><span>Used</span><b id="stTotal">0 GB</b></div><div class="storage-stat"><span>Available</span><b id="stAvailable">8 GB</b></div><div class="storage-stat"><span>Uploads</span><b id="stUpload">0 GB</b></div><div class="storage-stat"><span>Temp</span><b id="stTemp">0 GB</b></div><div class="storage-stat"><span>Outputs</span><b id="stOutput">0 GB</b></div></div>
-        <section class="storage-meter-panel"><div class="storage-meter-copy"><span>Workspace usage</span><b id="ringText">0.00 GB</b><small id="stBudget">0% of 8 GB</small></div><div class="storage-meter"><i id="storageUsageBar"></i></div><div class="storage-breakdown" id="storageBreakdown"></div><span id="ringGb" class="sr-only">0.00</span></section>
-        <div class="storage-content-grid"><section class="list-panel"><div class="list-panel-head"><h2>งานที่ใช้พื้นที่มาก</h2><span>คำนวณจากไฟล์ที่ผูกกับ Job</span></div><div id="storageHeavyList" class="heavy-list empty-state">กำลังตรวจพื้นที่</div></section><section class="list-panel"><div class="list-panel-head"><h2>ล้างพื้นที่</h2><span>Retention: 24 ชั่วโมง</span></div><div class="storage-delete-grid"><button id="cleanupUploadsBtn" class="btn ghost" type="button">ลบต้นฉบับ</button><button id="cleanupBtn" class="btn ghost" type="button">ลบไฟล์ชั่วคราว</button><button id="cleanupOutputsBtn" class="btn ghost" type="button">ลบผลลัพธ์</button><button id="cleanupAllBtn" class="btn danger" type="button">ล้างทั้งหมด</button></div></section></div>
+        <header class="page-hero storage-hero"><span class="arena-kicker">SUPPLY VAULT</span><h1>คลังทรัพยากร</h1><p>Workspace budget 8 GB ของแอป ไม่ใช่ quota เพิ่มของ Cloudflare R2</p></header>
+
+        <section class="resource-board">
+          <div class="resource-primary">
+            <span>CAPACITY</span><b id="stTotal">0 GB</b><small>ใช้งานแล้ว</small>
+            <div class="resource-rail"><i id="storageUsageBar"></i></div>
+            <div class="resource-budget"><strong id="ringText">0.00 GB</strong><span id="stBudget">0% of 8 GB</span></div>
+            <span id="ringGb" class="sr-only">0.00</span>
+          </div>
+          <div class="resource-lines">
+            <div><span>AVAILABLE</span><b id="stAvailable">8 GB</b></div>
+            <div><span>UPLOADS</span><b id="stUpload">0 GB</b></div>
+            <div><span>TEMP</span><b id="stTemp">0 GB</b></div>
+            <div><span>OUTPUTS</span><b id="stOutput">0 GB</b></div>
+          </div>
+          <div id="storageBreakdown" class="storage-breakdown"></div>
+        </section>
+
+        <div class="vault-grid">
+          <section class="vault-panel"><header><div><span>HEAVY PAYLOAD</span><h2>งานที่ใช้พื้นที่มาก</h2></div><small>คำนวณจากไฟล์ที่ผูกกับ Job</small></header><div id="storageHeavyList" class="heavy-list empty-state">กำลังตรวจพื้นที่</div></section>
+          <section class="vault-panel danger-zone"><header><div><span>CLEANUP</span><h2>ล้างพื้นที่</h2></div><small>Retention: 24 ชั่วโมง</small></header><div class="storage-delete-grid"><button id="cleanupUploadsBtn" class="btn ghost" type="button">ลบต้นฉบับ</button><button id="cleanupBtn" class="btn ghost" type="button">ลบไฟล์ชั่วคราว</button><button id="cleanupOutputsBtn" class="btn ghost" type="button">ลบผลลัพธ์</button><button id="cleanupAllBtn" class="btn danger" type="button">ล้างทั้งหมด</button></div></section>
+        </div>
       </section>
     </main>
   </div>
+
   <div id="toastHost" class="toast-host" aria-live="polite" aria-atomic="true"></div>
-  <div id="loadingOverlay" class="loading-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="loadingTitle"><div class="loader-card"><span class="loader-label">PROCESSING</span><h3 id="loadingTitle">กำลังเตรียมงาน</h3><p id="loadingText">กำลังเตรียมงาน</p><div class="progress-track loader-track battle-energy"><i id="loadingBar"></i></div><b id="loadingPercent">0%</b></div></div>
+  <div id="loadingOverlay" class="loading-overlay hidden" aria-live="polite"><div class="loader-card"><span class="loader-label">PROCESSING</span><h3 id="loadingTitle">กำลังประมวลผล</h3><p id="loadingText">กรุณารอสักครู่</p><div class="loader-track progress-track"><i id="loadingBar"></i></div><b id="loadingPercent">0%</b></div></div>
   <div id="confirmDialog" class="confirm-dialog hidden" role="dialog" aria-modal="true" aria-labelledby="confirmTitle"><button class="confirm-backdrop" type="button" data-confirm-cancel aria-label="ยกเลิก"></button><div class="confirm-sheet"><span class="confirm-kicker">CONFIRM ACTION</span><h3 id="confirmTitle">ยืนยันการทำรายการ</h3><p id="confirmText"></p><div class="confirm-actions"><button id="confirmCancelBtn" class="btn ghost" type="button">ยกเลิก</button><button id="confirmOkBtn" class="btn danger" type="button">ยืนยัน</button></div></div></div>
-  <script src="./app.js" defer></script><script src="./safety.js" defer></script><script src="./r3-studio.js" defer></script><script src="./studio-ui.js" defer></script><script src="./upload-migrate-v4.js"></script><script src="./upload-engine-v4.js" defer></script><script src="./pair-recovery.js" defer></script><script src="./studio-v2.js" defer></script>
+
+  <script src="./app.js" defer></script>
+  <script src="./safety.js" defer></script>
+  <script src="./r3-studio.js" defer></script>
+  <script src="./studio-ui.js" defer></script>
+  <script src="./upload-migrate-v4.js"></script>
+  <script src="./upload-engine-v4.js" defer></script>
+  <script src="./pair-recovery.js" defer></script>
+  <script src="./studio-v2.js" defer></script>
   <script>(()=>{const forceExplorerPicker=()=>{const video=document.getElementById('fileInput');if(video){video.removeAttribute('accept');video.removeAttribute('capture')}const audio=document.getElementById('pairAudioInput');if(audio){audio.removeAttribute('accept');audio.removeAttribute('capture')}};forceExplorerPicker();document.addEventListener('DOMContentLoaded',forceExplorerPicker,{once:true});new MutationObserver(forceExplorerPicker).observe(document.documentElement,{childList:true,subtree:true})})();</script>
 </body>
 </html>
