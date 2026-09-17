@@ -5,6 +5,7 @@ on:
     paths:
       - 'scripts/prepare_job_full.py'
       - 'scripts/media_pair.py'
+      - 'scripts/finalize_job.py'
       - 'scripts/test_media_pair.py'
       - 'src/worker-stability.js'
       - '.github/workflows/storage-efficiency.yml'
@@ -13,6 +14,7 @@ on:
     paths:
       - 'scripts/prepare_job_full.py'
       - 'scripts/media_pair.py'
+      - 'scripts/finalize_job.py'
       - 'scripts/test_media_pair.py'
       - 'src/worker-stability.js'
       - '.github/workflows/storage-efficiency.yml'
@@ -32,7 +34,7 @@ jobs:
 
       - name: Syntax checks
         run: |
-          python -m py_compile scripts/prepare_job_full.py scripts/media_pair.py scripts/test_media_pair.py
+          python -m py_compile scripts/prepare_job_full.py scripts/media_pair.py scripts/finalize_job.py scripts/test_media_pair.py
           node --check src/worker-stability.js
 
       - name: Direct separate-audio storage contract
@@ -70,4 +72,22 @@ jobs:
           grep -q 'temp/${jobId}/paired_source.mkv' src/worker-stability.js
           grep -q 'temp/${jobId}/source/chunk_${n}.mkv' src/worker-stability.js
           grep -q 'temp/${jobId}/transcript/chunk_${n}.json' src/worker-stability.js
+
+      - name: Final output compression contract
+        run: |
+          grep -q 'FINAL_COMPRESSION_CONTRACT = "final-h264-capped-v1"' scripts/finalize_job.py
+          grep -q 'FINAL_VIDEO_CODEC = "libx264"' scripts/finalize_job.py
+          grep -q 'FINAL_VIDEO_CRF = "22"' scripts/finalize_job.py
+          grep -q 'FINAL_VIDEO_MAXRATE = "2800k"' scripts/finalize_job.py
+          grep -q 'FINAL_AUDIO_BITRATE = "160k"' scripts/finalize_job.py
+          grep -q 'FINAL_VIDEO_BUFSIZE = "5600k"' scripts/finalize_job.py
+          grep -q 'Never fall back to stream-copy' scripts/finalize_job.py
+          if grep -q '"-c", "copy"' scripts/finalize_job.py; then
+            echo 'finalize_job.py still permits oversized stream-copy final output' >&2
+            exit 1
+          fi
+          echo 'FINAL_OUTPUT_COMPRESSION_V1_PASS'
+
+      - name: Storage efficiency acceptance
+        run: |
           echo 'STORAGE_EFFICIENCY_ACCEPTANCE_PASS'
