@@ -35,23 +35,26 @@ jobs:
       - name: Install lightweight TTS smoke dependencies
         run: python -m pip install --disable-pip-version-check "edge-tts>=7.2.0,<8"
 
-      - name: Generate real Thai voice-profile samples
+      - name: Generate real Thai voice-profile samples and recovery cases
         run: |
           python - <<'PY'
           import asyncio
           import sys
           from pathlib import Path
           sys.path.insert(0, 'scripts')
+          import voice_profiles
           from voice_profiles import list_profile_voices, synthesize_profile, decode_profile
 
           LOCALES = {'th': 'th-TH'}
 
           async def main():
               wanted = ['child-girl', 'teen-boy', 'adult-female', 'elder-male', 'narrator']
+              selected = {}
               for profile_name in wanted:
                   voices = await list_profile_voices('th', profile_name, LOCALES)
                   if not voices:
                       raise RuntimeError(f'No profile voice: {profile_name}')
+                  selected[profile_name] = voices[0]
                   profile = decode_profile(voices[0])
                   if not profile or not profile.get('voice'):
                       raise RuntimeError(f'Invalid profile encoding: {profile_name}')
@@ -64,6 +67,49 @@ jobs:
                   )
                   if not out.exists() or out.stat().st_size <= 0:
                       raise RuntimeError(f'Empty TTS output: {profile_name}')
+
+              # Punctuation-only Whisper/translation segments are not dialogue.
+              # They must become valid silence instead of failing the whole job.
+              punctuation = Path('punctuation-only.mp3')
+              await synthesize_profile('… — !!!', selected['adult-female'], punctuation)
+              if not punctuation.exists() or punctuation.stat().st_size <= 0:
+                  raise RuntimeError('Punctuation-only silence fallback failed')
+
+              # Reproduce the exact production failure class deterministically:
+              # the chosen styled profile returns no audio, but neutral settings
+              # on the same voice succeed. Recovery must happen automatically.
+              real_communicate = voice_profiles.edge_tts.Communicate
+              calls = []
+
+              class FakeCommunicate:
+                  def __init__(self, *, text, voice, rate, pitch, volume):
+                      self.text = text
+                      self.voice = voice
+                      self.rate = rate
+                      self.pitch = pitch
+                      self.volume = volume
+                      calls.append((voice, rate, pitch, volume))
+
+                  async def save(self, destination):
+                      if self.rate != '+0%' or self.pitch != '+0Hz':
+                          raise RuntimeError('No audio was received. Please verify that your parameters are correct.')
+                      Path(destination).write_bytes(b'deterministic-recovery-ok')
+
+              try:
+                  voice_profiles.edge_tts.Communicate = FakeCommunicate
+                  recovered = Path('deterministic-recovery.mp3')
+                  await synthesize_profile(
+                      'ทดสอบการกู้เสียงเมื่อ Edge ไม่คืนข้อมูลเสียง',
+                      selected['elder-male'],
+                      recovered,
+                  )
+                  if not recovered.exists() or recovered.stat().st_size <= 0:
+                      raise RuntimeError('Deterministic recovery did not produce output')
+                  if not any(rate == '+0%' and pitch == '+0Hz' for _, rate, pitch, _ in calls):
+                      raise RuntimeError(f'Neutral fallback was not attempted: {calls}')
+                  print('deterministic no-audio recovery: OK', calls)
+              finally:
+                  voice_profiles.edge_tts.Communicate = real_communicate
 
           asyncio.run(main())
           PY

@@ -15,6 +15,7 @@ def main() -> None:
     dispatch_worker = dispatch_worker_path.read_text(encoding='utf-8') if dispatch_worker_path.exists() else ''
     ui = (root / 'public' / 'r3-studio.js').read_text(encoding='utf-8')
     guard = (root / 'scripts' / 'dub_guard.py').read_text(encoding='utf-8')
+    voice_profiles = (root / 'scripts' / 'voice_profiles.py').read_text(encoding='utf-8')
     dubbing_workflow = (root / '.github' / 'workflows' / 'dubbing.yml').read_text(encoding='utf-8')
 
     direct_r3 = '"main": "src/worker-r3.js"' in wrangler
@@ -71,7 +72,16 @@ def main() -> None:
         '_clamp_sidechain_ratio', 'TTS guard retry',
     ):
         assert marker in guard, marker
+    for marker in (
+        'normalize_tts_text', '_plain_tts_text', '_has_speakable_text',
+        '_write_silence_mp3', '_fallback_voice_specs',
+        'TTS deterministic recovery', 'alternate-locale-voice',
+        'punctuation-only segment -> silence placeholder',
+    ):
+        assert marker in voice_profiles, marker
 
+    # Keep v6 unchanged so successful chunks from a failed long job stay reusable.
+    assert 'AUDIO_PROFILE_VERSION = 6' in guard
     assert 'max-parallel: 3' in dubbing_workflow
 
     print('R3 runtime integration acceptance: PASS')
