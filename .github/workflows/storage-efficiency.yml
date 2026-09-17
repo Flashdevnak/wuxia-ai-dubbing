@@ -41,7 +41,7 @@ jobs:
           grep -q 'DIRECT_PAIR_CONTRACT_VERSION = 2' scripts/media_pair.py
           grep -q 'direct_pair_manifest_compatible' scripts/prepare_job_full.py
           grep -q 'audioMuxed' scripts/prepare_job_full.py
-          grep -q 'STORAGE_EFFICIENT_DIRECT_PAIR_PASS' scripts/prepare_job_full.py
+          grep -q 'STORAGE_EFFICIENT_DIRECT_PAIR_V2_PASS' scripts/prepare_job_full.py
           grep -q 'do not create temp/{job}/paired_source.mkv' scripts/prepare_job_full.py
           if grep -q 'mux_separate_audio' scripts/prepare_job_full.py; then
             echo 'prepare_job_full.py still imports or calls full-file muxing' >&2
