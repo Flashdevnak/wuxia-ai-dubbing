@@ -13,8 +13,22 @@ import srt
 from worker_client import WorkerClient
 
 
+# Final output policy: keep a browser/device friendly H.264 MP4, but never
+# stream-copy the much higher temporary chunk bitrate into the final file.
+# At the configured VBV ceiling, a 3-hour job stays around 4 GB instead of
+# growing to 6+ GB while retaining 1080p source resolution and frame rate.
+FINAL_VIDEO_CODEC = "libx264"
+FINAL_VIDEO_PRESET = "veryfast"
+FINAL_VIDEO_CRF = "22"
+FINAL_VIDEO_MAXRATE = "2800k"
+FINAL_VIDEO_BUFSIZE = "5600k"
+FINAL_AUDIO_BITRATE = "160k"
+FINAL_AUDIO_RATE = "48000"
+FINAL_COMPRESSION_CONTRACT = "final-h264-capped-v1"
+
+
 def run_ffmpeg_to_drive(client: WorkerClient, cmd: list[str], output_key: str) -> dict:
-    """Run ffmpeg, stream MP4 stdout to Drive, and always surface ffmpeg stderr."""
+    """Run ffmpeg, stream MP4 stdout to R2, and always surface ffmpeg stderr."""
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
     assert proc.stdout is not None and proc.stderr is not None
 
@@ -59,6 +73,26 @@ def run_ffmpeg_to_drive(client: WorkerClient, cmd: list[str], output_key: str) -
     if int(upload_result.get("size") or 0) <= 0:
         raise RuntimeError("ไฟล์วิดีโอผลลัพธ์มีขนาด 0 ไบต์")
     return upload_result
+
+
+def final_encode_command(concat_file: Path, preset: str, crf: str) -> list[str]:
+    """Build the bounded H.264 final encode used for every successful dub."""
+    return [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-fflags", "+genpts",
+        "-f", "concat", "-safe", "0", "-i", str(concat_file),
+        "-map", "0:v:0", "-map", "0:a:0",
+        "-c:v", FINAL_VIDEO_CODEC,
+        "-preset", preset,
+        "-crf", crf,
+        "-maxrate", FINAL_VIDEO_MAXRATE,
+        "-bufsize", FINAL_VIDEO_BUFSIZE,
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", FINAL_AUDIO_BITRATE, "-ar", FINAL_AUDIO_RATE,
+        "-avoid_negative_ts", "make_zero",
+        "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+        "-f", "mp4", "pipe:1",
+    ]
 
 
 def subtitles_to_transcript_xml(items: list[srt.Subtitle]) -> str:
@@ -172,53 +206,53 @@ def main() -> None:
     )
 
     output_key = f"outputs/{job_id}/dub_{target}.mp4"
-    client.patch_job(job_id, status="processing", progress=97, stage="กำลังรวมภาพและเสียง")
+    client.patch_job(job_id, status="processing", progress=97, stage="กำลังบีบอัดและรวมวิดีโอสุดท้าย")
 
-    # First try stream-copy: fastest and keeps the already encoded chunks intact.
-    copy_cmd = [
-        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-        "-fflags", "+genpts",
-        "-f", "concat", "-safe", "0", "-i", str(concat_file),
-        "-map", "0:v:0", "-map", "0:a:0",
-        "-c", "copy",
-        "-bsf:a", "aac_adtstoasc",
-        "-avoid_negative_ts", "make_zero",
-        "-movflags", "frag_keyframe+empty_moov+default_base_moof",
-        "-f", "mp4", "pipe:1",
-    ]
-
+    # Always normalize the final MP4 instead of stream-copying chunk bitrates.
+    # The old stream-copy path produced 6+ GB outputs for ~3-hour 1080p jobs.
+    # CRF keeps normal scenes clean while maxrate/bufsize bound pathological
+    # chunk bitrates so the 8 GB app workspace remains usable.
+    primary_cmd = final_encode_command(concat_file, FINAL_VIDEO_PRESET, FINAL_VIDEO_CRF)
     try:
-        upload_result = run_ffmpeg_to_drive(client, copy_cmd, output_key)
-        print("Final concat stream-copy succeeded", flush=True)
-    except Exception as copy_error:
-        # Some MPEG-TS timestamp layouts cannot be stream-copied safely into MP4.
-        # Retry once with a fast normalization encode instead of failing at 94%.
-        print(f"Fast final merge failed, retrying with normalization: {copy_error}", flush=True)
-        client.patch_job(job_id, status="processing", progress=98, stage="กำลังแก้เวลาไฟล์และรวมใหม่")
-        encode_cmd = [
-            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-            "-fflags", "+genpts",
-            "-f", "concat", "-safe", "0", "-i", str(concat_file),
-            "-map", "0:v:0", "-map", "0:a:0",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-            "-c:a", "aac", "-b:a", "160k", "-ar", "48000",
-            "-avoid_negative_ts", "make_zero",
-            "-movflags", "frag_keyframe+empty_moov+default_base_moof",
-            "-f", "mp4", "pipe:1",
-        ]
+        upload_result = run_ffmpeg_to_drive(client, primary_cmd, output_key)
+        print(
+            f"Final compression succeeded: {FINAL_COMPRESSION_CONTRACT} "
+            f"preset={FINAL_VIDEO_PRESET} crf={FINAL_VIDEO_CRF} maxrate={FINAL_VIDEO_MAXRATE}",
+            flush=True,
+        )
+    except Exception as primary_error:
+        # Retry once with a faster encoder setting, while preserving the same
+        # bitrate ceiling. Never fall back to stream-copy because that recreates
+        # the oversized-output problem this contract is designed to prevent.
+        print(f"Primary final compression failed; retrying fast-safe encode: {primary_error}", flush=True)
+        client.patch_job(job_id, status="processing", progress=98, stage="กำลังรวมวิดีโอด้วยโหมดสำรอง")
+        fallback_cmd = final_encode_command(concat_file, "ultrafast", "23")
         try:
-            upload_result = run_ffmpeg_to_drive(client, encode_cmd, output_key)
-        except Exception as encode_error:
+            upload_result = run_ffmpeg_to_drive(client, fallback_cmd, output_key)
+        except Exception as fallback_error:
             raise RuntimeError(
-                "รวมวิดีโอขั้นสุดท้ายไม่สำเร็จทั้งแบบเร็วและแบบแก้เวลา: "
-                f"{encode_error}; ครั้งแรก: {copy_error}"
-            ) from encode_error
+                "รวมวิดีโอขั้นสุดท้ายไม่สำเร็จทั้งโหมดหลักและโหมดสำรอง: "
+                f"{fallback_error}; ครั้งแรก: {primary_error}"
+            ) from fallback_error
 
     size_bytes = int(upload_result.get("size") or 0)
+    # The configured video+audio ceiling is about 2.96 Mbps. Allow generous
+    # muxing/VBV overhead but surface a warning if a long output escapes it.
+    if offset >= 600:
+        expected_ceiling = int(offset * 3_200_000 / 8)
+        if size_bytes > expected_ceiling:
+            print(
+                f"Final size warning: {size_bytes} bytes exceeds bounded expectation {expected_ceiling}",
+                flush=True,
+            )
+
     client.patch_job(job_id, status="processing", progress=99, stage="กำลังบันทึกผลลัพธ์")
     client.finish(job_id, output_key, subtitle_key, offset, size_bytes)
 
     if bool(job.get("autoCleanup", True)):
+        # Source uploads are released safely by worker-stability once every dub
+        # chunk is durable / the job completes. Here we remove per-job temporary
+        # and checkpoint objects after the final output has been verified.
         for cleanup_kind in ("temp", "state"):
             for _ in range(200):
                 try:
@@ -236,6 +270,10 @@ def main() -> None:
         "transcriptXmlKey": transcript_xml_key,
         "duration": offset,
         "sizeBytes": size_bytes,
+        "finalCompressionContract": FINAL_COMPRESSION_CONTRACT,
+        "videoCrf": int(FINAL_VIDEO_CRF),
+        "videoMaxrate": FINAL_VIDEO_MAXRATE,
+        "audioBitrate": FINAL_AUDIO_BITRATE,
     }, ensure_ascii=False))
 
 
