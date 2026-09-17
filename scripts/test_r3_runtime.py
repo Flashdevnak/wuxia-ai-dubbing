@@ -11,6 +11,8 @@ def main() -> None:
     pair_worker = pair_worker_path.read_text(encoding='utf-8') if pair_worker_path.exists() else ''
     stability_worker_path = root / 'src' / 'worker-stability.js'
     stability_worker = stability_worker_path.read_text(encoding='utf-8') if stability_worker_path.exists() else ''
+    dispatch_worker_path = root / 'src' / 'worker-separate-audio-dispatch.js'
+    dispatch_worker = dispatch_worker_path.read_text(encoding='utf-8') if dispatch_worker_path.exists() else ''
     ui = (root / 'public' / 'r3-studio.js').read_text(encoding='utf-8')
     guard = (root / 'scripts' / 'dub_guard.py').read_text(encoding='utf-8')
 
@@ -27,17 +29,27 @@ def main() -> None:
         and "import fastWorker from './worker-fast.js'" in pair_worker
         and "import r3Worker from './worker-r3.js'" in fast_worker
     )
-    assert direct_r3 or wrapped_r3 or pair_wrapped_r3 or stability_wrapped_r3
+    dispatch_wrapped_r3 = (
+        '"main": "src/worker-separate-audio-dispatch.js"' in wrangler
+        and "import stabilityWorker from './worker-stability.js'" in dispatch_worker
+        and "import pairWorker from './worker-pairfix.js'" in stability_worker
+        and "import fastWorker from './worker-fast.js'" in pair_worker
+        and "import r3Worker from './worker-r3.js'" in fast_worker
+    )
+    assert direct_r3 or wrapped_r3 or pair_wrapped_r3 or stability_wrapped_r3 or dispatch_wrapped_r3
 
-    if wrapped_r3 or pair_wrapped_r3 or stability_wrapped_r3:
+    if wrapped_r3 or pair_wrapped_r3 or stability_wrapped_r3 or dispatch_wrapped_r3:
         for marker in ('uploadAcceleration', 'uploadConcurrencyMax'):
             assert marker in fast_worker, marker
-    if pair_wrapped_r3 or stability_wrapped_r3:
+    if pair_wrapped_r3 or stability_wrapped_r3 or dispatch_wrapped_r3:
         for marker in ('separateAudioPairRecovery', 'pair-recovery.js', 'attach-audio'):
             assert marker in pair_worker, marker
-    if stability_wrapped_r3:
+    if stability_wrapped_r3 or dispatch_wrapped_r3:
         for marker in ('resilient-multipart-v4', 'upload-engine-v4.js', 'uploadServerReconcile', 'versionQueryRequired'):
             assert marker in stability_worker, marker
+    if dispatch_wrapped_r3:
+        for marker in ('sourceAudioKey', 'separateAudioPersistBeforeDispatch', 'pair-retry-v2.js'):
+            assert marker in dispatch_worker, marker
 
     for marker in (
         'r3SmartStudio', '/api/r3/batch', '/repair', 'r3-studio.js',
