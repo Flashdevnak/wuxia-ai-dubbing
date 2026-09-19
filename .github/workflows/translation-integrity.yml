@@ -3,16 +3,22 @@ name: Translation Integrity Acceptance
 on:
   pull_request:
     paths:
+      - 'src/worker.js'
       - 'src/worker-translation-integrity.js'
+      - 'scripts/dub_guard.py'
       - 'scripts/dub_guard_integrity.py'
+      - 'scripts/test_translation_runtime.mjs'
       - '.github/workflows/dubbing.yml'
       - 'wrangler.jsonc'
       - '.github/workflows/translation-integrity.yml'
   push:
     branches: [main]
     paths:
+      - 'src/worker.js'
       - 'src/worker-translation-integrity.js'
+      - 'scripts/dub_guard.py'
       - 'scripts/dub_guard_integrity.py'
+      - 'scripts/test_translation_runtime.mjs'
       - '.github/workflows/dubbing.yml'
       - 'wrangler.jsonc'
       - '.github/workflows/translation-integrity.yml'
@@ -35,6 +41,9 @@ jobs:
           node --check src/worker-translation-integrity.js
           python -m py_compile scripts/dub_guard_integrity.py
 
+      - name: Translation runtime partial-repair acceptance
+        run: node scripts/test_translation_runtime.mjs
+
       - name: Worker translation response guard contract
         run: |
           grep -q "translation-integrity-v1" src/worker-translation-integrity.js
@@ -42,6 +51,10 @@ jobs:
           grep -q "cjk-leak-in-thai" src/worker-translation-integrity.js
           grep -q "repetition-runaway" src/worker-translation-integrity.js
           grep -q "translation integrity rejected unsafe model output" src/worker-translation-integrity.js
+          grep -q "unresolvedIndexes" src/worker.js
+          grep -q "if (unresolved.has(i)) continue" src/worker-translation-integrity.js
+          grep -q "translationPartialRepair" src/worker-translation-integrity.js
+          grep -q "TRANSLATION_PARTIAL_REPAIR_PASS" scripts/test_translation_runtime.mjs
           grep -q '"main": "src/worker-translation-integrity.js"' wrangler.jsonc
 
       - name: Runner subtitle integrity guard contract
@@ -50,6 +63,8 @@ jobs:
           grep -q "prompt-or-json-leak" scripts/dub_guard_integrity.py
           grep -q "cjk-leak-in-thai" scripts/dub_guard_integrity.py
           grep -q "Translation Integrity Gate ไม่ผ่าน" scripts/dub_guard_integrity.py
+          grep -q "Translation guard repaired segment" scripts/dub_guard.py
+          grep -q "_google_translate_limited" scripts/dub_guard.py
           grep -q "python scripts/dub_guard_integrity.py" .github/workflows/dubbing.yml
           if grep -q "python scripts/dub_guard.py" .github/workflows/dubbing.yml; then
             echo 'dubbing workflow still bypasses translation integrity guard' >&2

@@ -156,17 +156,39 @@ def guarded_translate_texts(client, texts: list[str], source_lang: str, target_l
     if source_lang != target_lang:
         bad = [i for i, (src, out) in enumerate(zip(prepared, translated)) if _translation_bad(src, out, target_lang)]
         unresolved: list[int] = []
+        google = None
+        google_source = "auto" if source_lang == "auto" else base.GOOGLE_CODES.get(source_lang, source_lang)
+        google_target = base.GOOGLE_CODES.get(target_lang, target_lang)
+
         for i in bad:
             one_duration = [durations[i]] if durations is not None and i < len(durations) else None
+
+            # First ask Workers AI to repair only the single bad sentence.
             try:
                 retry = client.translate([prepared[i]], source_lang, target_lang, one_duration)
                 candidate = str(retry[0]) if retry else ''
                 if not _translation_bad(prepared[i], candidate, target_lang):
                     translated[i] = candidate
+                    print(f"Translation guard repaired segment {i + 1} with Workers AI", flush=True)
                     continue
             except Exception as exc:
-                print(f"Translation guard retry failed for segment {i}: {exc}", flush=True)
+                print(f"Translation guard Workers AI retry failed for segment {i + 1}: {exc}", flush=True)
+
+            # Only this one unresolved sentence is allowed to reach Google.
+            # Never spill a whole 12-line batch into the emergency provider.
+            if google is None:
+                google = base.GoogleTranslator(source=google_source, target=google_target)
+            try:
+                candidate = base._google_translate_limited(google, prepared[i], i + 1)
+                if not _translation_bad(prepared[i], candidate, target_lang):
+                    translated[i] = candidate
+                    print(f"Translation guard repaired segment {i + 1} with paced Google fallback", flush=True)
+                    continue
+            except Exception as exc:
+                print(f"Translation guard Google fallback failed for segment {i + 1}: {exc}", flush=True)
+
             unresolved.append(i)
+
         if unresolved:
             preview = ', '.join(str(i + 1) for i in unresolved[:8])
             raise RuntimeError(

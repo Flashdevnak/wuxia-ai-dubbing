@@ -170,6 +170,10 @@ jobs:
           grep -q "max-parallel: 2" .github/workflows/dubbing.yml
           grep -q "GOOGLE_FALLBACK_INTERVAL_SECONDS = 0.9" scripts/dub_chunk.py
           grep -q "TRANSLATION_RUNTIME_RESILIENCE_PASS" scripts/test_translation_runtime.mjs
+          grep -q "TRANSLATION_PARTIAL_REPAIR_PASS" scripts/test_translation_runtime.mjs
+          grep -q "unresolvedIndexes" src/worker.js
+          grep -q "translationPartialRepair" src/worker-translation-integrity.js
+          grep -q "Translation guard repaired segment" scripts/dub_guard.py
           grep -q "python scripts/prepare_job_full.py" .github/workflows/dubbing.yml
           grep -q "Noto Sans Thai" .github/workflows/dubbing.yml
           grep -q "AUDIO_PROFILE_VERSION = 6" scripts/dub_guard.py

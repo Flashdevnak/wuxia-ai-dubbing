@@ -55,6 +55,10 @@ async function guardTranslateResponse(request, response) {
   const durations = Array.isArray(body?.durations) ? body.durations : [];
   const targetLang = String(body?.targetLang || '');
   const translations = Array.isArray(payload?.translations) ? payload.translations.map(x => String(x ?? '')) : [];
+  const unresolvedIndexes = Array.isArray(payload?.unresolvedIndexes)
+    ? payload.unresolvedIndexes.map(Number).filter(Number.isInteger)
+    : [];
+  const unresolved = new Set(unresolvedIndexes);
 
   if (!texts.length || translations.length !== texts.length) {
     return json({
@@ -67,6 +71,7 @@ async function guardTranslateResponse(request, response) {
 
   const failures = [];
   for (let i = 0; i < texts.length; i += 1) {
+    if (unresolved.has(i)) continue;
     const reason = translationProblem(texts[i], translations[i], targetLang, durations[i]);
     if (reason) failures.push({ index: i, reason, preview: translations[i].slice(0, 120) });
   }
@@ -94,6 +99,7 @@ async function enrichHealth(response) {
     data.translationIntegrityContract = CONTRACT;
     data.translationPromptLeakRejected = true;
     data.translationCjkLeakRejectedForThai = true;
+    data.translationPartialRepair = true;
     const headers = new Headers(response.headers);
     headers.delete('content-length');
     headers.set('content-type', 'application/json; charset=utf-8');
