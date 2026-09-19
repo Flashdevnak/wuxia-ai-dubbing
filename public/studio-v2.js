@@ -137,7 +137,8 @@
     const raw = Math.max(0, Math.min(100, Number(j?.progress) || 0));
     const status = String(j?.status || 'queued').toLowerCase();
     const stage = safeText(j?.stage || statusLabel(status));
-    const current = phaseIndexFrom(stage, raw, status);
+    const err = safeText(j?.error || '');
+    const current = phaseIndexFrom(`${stage} ${err}`, raw, status);
     const created = j?.createdAt ? new Date(j.createdAt).toLocaleString('th-TH') : '—';
     const updated = j?.updatedAt || j?.createdAt ? new Date(j.updatedAt || j.createdAt).toLocaleString('th-TH') : '—';
     const series = safeText(j?.series || '');
@@ -149,7 +150,6 @@
     const meta = j?.jobType === 'transcript'
       ? `คำบรรยาย · ${safeText(j?.sourceLang || 'auto')} → ${safeText(j?.targetLang || 'th')}`
       : `${safeText(j?.sourceLang || 'auto')} → ${safeText(j?.targetLang || 'th')} · ${mode}`;
-    const err = safeText(j?.error || '');
     const control = status === 'failed'
       ? `<button class="mini-btn" data-job-action="retry" data-job-id="${esc(j.id)}">ลองใหม่</button>`
       : status === 'paused'
