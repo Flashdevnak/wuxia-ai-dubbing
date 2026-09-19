@@ -289,7 +289,9 @@ async function runSingleTranslation(env, text, sourceLang, targetLang) {
 
 async function translateWithAI(env, texts, sourceLang, targetLang, durations = []) {
   if (!env.AI) throw new Error('Workers AI binding unavailable');
-  if (sourceLang === targetLang) return texts;
+  if (sourceLang === targetLang) {
+    return { translations: texts.map(x => String(x)), unresolvedIndexes: [] };
+  }
 
   let batchTranslations = null;
   try {
@@ -317,30 +319,54 @@ async function translateWithAI(env, texts, sourceLang, targetLang, durations = [
     }
     if (results[idx] != null) continue;
 
-    let repaired = null;
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const strategies = [
+      async () => runSingleTranslation(env, original, sourceLang, targetLang),
+      async () => {
+        const out = await runTranslationBatch(
+          env,
+          [original],
+          sourceLang,
+          targetLang,
+          durations?.[idx] != null ? [durations[idx]] : [],
+        );
+        const parsed = parseTranslationValue(out, 1);
+        return parsed?.[0] ? String(parsed[0]).trim() : '';
+      },
+      async () => runSingleTranslation(
+        env,
+        `Translate to natural Thai only. Do not repeat Chinese characters. Meaning: ${original}`,
+        sourceLang,
+        targetLang,
+      ),
+    ];
+
+    for (let attempt = 0; attempt < strategies.length; attempt += 1) {
       try {
-        const translated = await runSingleTranslation(env, original, sourceLang, targetLang);
+        const translated = await strategies[attempt]();
         if (translationOutputSafe(original, translated, targetLang)) {
-          repaired = translated;
+          results[idx] = translated;
           break;
         }
-        console.warn(`Workers AI single translation ${idx} attempt ${attempt} failed integrity`);
+        console.warn(`Workers AI single translation ${idx} strategy ${attempt + 1} failed integrity`);
       } catch (err) {
-        console.warn(`Workers AI single translation ${idx} attempt ${attempt} failed`, err?.message || String(err));
+        console.warn(`Workers AI single translation ${idx} strategy ${attempt + 1} failed`, err?.message || String(err));
       }
-      if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 180 * attempt));
+      if (attempt + 1 < strategies.length) await new Promise(resolve => setTimeout(resolve, 180 * (attempt + 1)));
     }
-    if (repaired != null) results[idx] = repaired;
   }
 
-  const unresolved = results
+  const unresolvedIndexes = results
     .map((value, index) => (value == null ? index : -1))
     .filter(index => index >= 0);
-  if (unresolved.length) {
-    throw new Error(`Workers AI translation unresolved indexes: ${unresolved.slice(0, 12).join(',')}`);
+
+  for (const index of unresolvedIndexes) {
+    results[index] = String(texts[index] || '');
   }
-  return results;
+
+  return {
+    translations: results.map(x => String(x ?? '')),
+    unresolvedIndexes,
+  };
 }
 
 function githubHeaders(env) {
@@ -480,14 +506,18 @@ async function handleInternal(request, env, url) {
     const texts = Array.isArray(body.texts) ? body.texts.map(x => String(x)) : [];
     if (!texts.length || texts.length > 20) return json({ error: 'invalid translation batch' }, 400);
     const durations = Array.isArray(body.durations) ? body.durations.map(x => Math.max(0.1, Number(x) || 0.1)) : [];
-    const translations = await translateWithAI(
+    const result = await translateWithAI(
       env,
       texts,
       String(body.sourceLang || 'auto'),
       String(body.targetLang || 'th'),
       durations.length === texts.length ? durations : [],
     );
-    return json({ translations });
+    return json({
+      translations: result.translations,
+      unresolvedIndexes: result.unresolvedIndexes,
+      partialRepair: result.unresolvedIndexes.length > 0,
+    });
   }
 
 if (p === '/api/internal/complete' && request.method === 'POST') {
