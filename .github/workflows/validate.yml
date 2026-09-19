@@ -87,6 +87,7 @@ jobs:
             scripts/media_pair.py \
             scripts/prepare_job.py \
             scripts/prepare_job_full.py \
+            scripts/test_prepare_audio_guard.py \
             scripts/test_media_pair.py \
             scripts/dub_chunk.py \
             scripts/dub_guard.py \
@@ -110,6 +111,12 @@ jobs:
             sudo apt-get update -qq
             sudo apt-get install -y ffmpeg
           fi
+
+      - name: Reject uploaded video-only sources before dubbing
+        working-directory: scripts
+        run: |
+          pip install requests
+          python test_prepare_audio_guard.py
 
       - name: Run real video plus separate-audio acceptance
         working-directory: scripts
@@ -143,6 +150,7 @@ jobs:
           test -f wrangler.jsonc
           test -f requirements.txt
           test -f scripts/media_pair.py
+          test -f scripts/test_prepare_audio_guard.py
           test -f scripts/test_media_pair.py
           test -f scripts/test_pair_recovery.mjs
           test -f scripts/dub_guard.py
@@ -164,6 +172,9 @@ jobs:
           grep -q "translation cache HIT" scripts/dub_guard.py
           grep -q "auto-cast" scripts/voice_profiles.py
           grep -q "youtube-auto-hybrid" scripts/prepare_job_full.py
+          grep -q "ไฟล์วิดีโอนี้ไม่มีเสียง (video-only)" scripts/prepare_job.py
+          grep -q "sourceStreamsVerified" scripts/prepare_job.py
+          grep -q "PREPARE_AUDIO_GUARD_ACCEPTANCE_PASS" scripts/test_prepare_audio_guard.py
           grep -q "sourceAudioKey" scripts/prepare_job_full.py
           grep -q "paired_source.mkv" scripts/prepare_job_full.py
           grep -q "1:a:0" scripts/media_pair.py

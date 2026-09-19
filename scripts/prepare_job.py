@@ -118,6 +118,27 @@ def probe_duration(input_url: str, headers: str | None = None) -> float:
         return 0.0
 
 
+def has_media_stream(input_url: str, selector: str, headers: str | None = None) -> bool:
+    cmd = ["ffprobe", "-v", "error"]
+    if headers:
+        cmd += ["-headers", headers]
+    cmd += [
+        "-select_streams", selector,
+        "-show_entries", "stream=index",
+        "-of", "csv=p=0",
+        input_url,
+    ]
+    try:
+        return bool(run_capture(cmd).strip())
+    except Exception:
+        return False
+
+
+def fail_job(client: WorkerClient, job_id: str, message: str) -> None:
+    client.fail(job_id, message)
+    raise RuntimeError(message)
+
+
 def emit_outputs(manifest: dict, github_output: str | None) -> None:
     chunks = list(manifest.get("chunks") or [])
     total = int(manifest.get("total") or len(chunks))
@@ -199,7 +220,24 @@ def main() -> None:
             client.download(manifest_key, manifest_path)
             previous = json.loads(manifest_path.read_text(encoding="utf-8"))
             previous_chunks = list(previous.get("chunks") or [])
-            if previous_chunks and all(client.exists(str(c.get("key") or "")) for c in previous_chunks):
+            previous_keys_ready = previous_chunks and all(
+                client.exists(str(c.get("key") or "")) for c in previous_chunks
+            )
+            previous_streams_ready = False
+            if previous_keys_ready:
+                first_key = str(previous_chunks[0].get("key") or "")
+                first_url = f"{args.worker_url.rstrip('/')}/api/internal/file?key={quote(first_key, safe='')}"
+                reuse_headers = f"x-worker-token: {args.token}\r\n"
+                previous_streams_ready = (
+                    has_media_stream(first_url, "v:0", reuse_headers)
+                    and has_media_stream(first_url, "a:0", reuse_headers)
+                )
+                if not previous_streams_ready:
+                    print(
+                        "Ignoring prepared manifest because its source chunks do not contain both video and audio",
+                        flush=True,
+                    )
+            if previous_keys_ready and previous_streams_ready:
                 total = int(previous.get("total") or len(previous_chunks))
                 client.patch_job(
                     job_id,
@@ -209,7 +247,7 @@ def main() -> None:
                     duration=float(previous.get("duration") or 0),
                     chunkTotal=total,
                 )
-                print(f"Reusing prepared manifest with {total} chunks", flush=True)
+                print(f"Reusing prepared manifest with {total} verified audio/video chunks", flush=True)
                 emit_outputs(previous, args.github_output)
                 return
     except Exception as exc:
@@ -314,6 +352,20 @@ def main() -> None:
             client.fail(job_id, "เปิดลิงก์ YouTube ไม่สำเร็จ: " + message)
             raise
 
+    if not has_media_stream(input_url, "v:0", headers):
+        fail_job(
+            client,
+            job_id,
+            "ไฟล์ต้นฉบับไม่มีภาพวิดีโอ กรุณาเลือกไฟล์วิดีโอใหม่",
+        )
+    if not has_media_stream(input_url, "a:0", headers):
+        fail_job(
+            client,
+            job_id,
+            "ไฟล์วิดีโอนี้ไม่มีเสียง (video-only) กรุณาใช้ไฟล์วิดีโอที่มีเสียง หรืออัปโหลดไฟล์เสียงแยกคู่กับวิดีโอ",
+        )
+
+    client.patch_job(job_id, status="processing", progress=4, stage="ตรวจพบภาพและเสียงแล้ว กำลังแบ่งวิดีโอ")
     duration = probe_duration(input_url, headers)
     chunks_dir = work / "chunks"
     chunks_dir.mkdir(parents=True, exist_ok=True)
@@ -349,6 +401,18 @@ def main() -> None:
             size = current.stat().st_size
             if size <= 0:
                 return
+            if not has_media_stream(str(current), "v:0"):
+                fail_job(
+                    client,
+                    job_id,
+                    f"ช่วงวิดีโอ {next_index + 1} ไม่มีภาพ ระบบหยุดก่อนเริ่มพากย์",
+                )
+            if not has_media_stream(str(current), "a:0"):
+                fail_job(
+                    client,
+                    job_id,
+                    f"ช่วงวิดีโอ {next_index + 1} ไม่มีเสียง ระบบหยุดก่อนเริ่มพากย์",
+                )
             key = f"temp/{job_id}/source/chunk_{next_index:05d}.mkv"
             print(f"Uploading source chunk {next_index}: {size} bytes")
             client.upload(current, key, "video/x-matroska")
@@ -410,6 +474,7 @@ def main() -> None:
         "subtitles": bool(job.get("subtitles", True)),
         "keepMusic": bool(job.get("keepMusic", True)),
         "speakerSeparation": bool(job.get("speakerSeparation", False)),
+        "sourceStreamsVerified": True,
     }
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     client.upload(manifest_path, manifest_key, "application/json")
