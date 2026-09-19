@@ -114,7 +114,9 @@ jobs:
 
       - name: Reject uploaded video-only sources before dubbing
         working-directory: scripts
-        run: python test_prepare_audio_guard.py
+        run: |
+          pip install requests
+          python test_prepare_audio_guard.py
 
       - name: Run real video plus separate-audio acceptance
         working-directory: scripts
