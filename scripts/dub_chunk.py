@@ -123,42 +123,85 @@ async def synthesize_many(plans: list[dict], concurrency: int = 4) -> None:
     await asyncio.gather(*(one(p) for p in plans))
 
 
+GOOGLE_FALLBACK_INTERVAL_SECONDS = 0.9
+GOOGLE_FALLBACK_RETRY_DELAYS = (4.0, 8.0, 16.0)
+
+
+def _google_translate_limited(
+    translator: GoogleTranslator,
+    text: str,
+    segment_number: int,
+) -> str:
+    if not text.strip():
+        return ""
+
+    last: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            # Multiple GitHub chunk jobs can be active together. Pace the
+            # emergency provider so aggregate requests stay below Google's
+            # documented 5 req/s limit instead of flooding it per sentence.
+            time.sleep(GOOGLE_FALLBACK_INTERVAL_SECONDS)
+            result = translator.translate(text)
+            if result and str(result).strip():
+                return str(result).strip()
+            last = RuntimeError("empty Google translation")
+        except Exception as exc:
+            last = exc
+        if attempt < 3:
+            delay = GOOGLE_FALLBACK_RETRY_DELAYS[attempt - 1]
+            print(
+                f"Google fallback retry {attempt}/3 for segment {segment_number} after {delay:.0f}s: {last}",
+                flush=True,
+            )
+            time.sleep(delay)
+
+    print(
+        f"Google fallback failed for segment {segment_number}; leaving source for integrity guard: {last}",
+        flush=True,
+    )
+    return text
+
+
 def translate_texts(client: WorkerClient, texts: list[str], source_lang: str, target_lang: str, durations: list[float] | None = None) -> list[str]:
     if not texts or source_lang == target_lang:
         return texts
 
+    source = "auto" if source_lang == "auto" else GOOGLE_CODES.get(source_lang, source_lang)
+    target = GOOGLE_CODES.get(target_lang, target_lang)
+    google: GoogleTranslator | None = None
     translated: list[str] = []
-    try:
-        for i in range(0, len(texts), 12):
-            batch = texts[i:i + 12]
-            batch_durations = durations[i:i + 12] if durations is not None else None
+
+    # Process each Workers AI batch independently. A single malformed batch must
+    # never discard already-valid translations and force an entire 20-minute
+    # chunk through Google one sentence at a time.
+    for start in range(0, len(texts), 12):
+        batch = texts[start:start + 12]
+        batch_durations = durations[start:start + 12] if durations is not None else None
+        try:
             got = client.translate(batch, source_lang, target_lang, batch_durations)
             if len(got) != len(batch):
                 raise RuntimeError("Workers AI returned an unexpected translation count")
-            translated.extend(got)
-        return translated
-    except Exception as exc:
-        print("Workers AI translation unavailable, falling back to GoogleTranslator:", exc, flush=True)
-
-    source = "auto" if source_lang == "auto" else GOOGLE_CODES.get(source_lang, source_lang)
-    target = GOOGLE_CODES.get(target_lang, target_lang)
-    translator = GoogleTranslator(source=source, target=target)
-    for idx, text in enumerate(texts, 1):
-        if not text.strip():
-            translated.append("")
+            translated.extend(str(x) for x in got)
             continue
-        last: Exception | None = None
-        for attempt in range(1, 4):
-            try:
-                translated.append(translator.translate(text) or text)
-                last = None
-                break
-            except Exception as exc:
-                last = exc
-                time.sleep(attempt * 1.0)
-        if last is not None:
-            print(f"Translation failed for segment {idx}; using source text: {last}", flush=True)
-            translated.append(text)
+        except Exception as exc:
+            print(
+                f"Workers AI translation batch {start // 12 + 1} failed; "
+                f"repairing only {len(batch)} subtitle(s) with paced Google fallback: {exc}",
+                flush=True,
+            )
+
+        if google is None:
+            google = GoogleTranslator(source=source, target=target)
+        for offset, text in enumerate(batch):
+            translated.append(
+                _google_translate_limited(
+                    google,
+                    text,
+                    start + offset + 1,
+                )
+            )
+
     return translated
 
 
