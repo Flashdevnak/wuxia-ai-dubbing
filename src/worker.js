@@ -134,6 +134,72 @@ function extractAIText(value, depth = 0) {
   return '';
 }
 
+const TRANSLATION_CJK_RE = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/u;
+const TRANSLATION_LEAK_RE = /"(?:sourceLanguage|targetLanguage|durationsSeconds|texts)"\s*:|\{\s*"translations"\s*:/iu;
+
+function extractBalancedJsonCandidates(value) {
+  const text = String(value || '');
+  const found = [];
+  let start = -1;
+  let stack = [];
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (start < 0) {
+      if (ch === '{' || ch === '[') {
+        start = i;
+        stack = [ch];
+        inString = false;
+        escaped = false;
+      }
+      continue;
+    }
+
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === '{' || ch === '[') {
+      stack.push(ch);
+      continue;
+    }
+    if (ch === '}' || ch === ']') {
+      const expected = ch === '}' ? '{' : '[';
+      if (stack[stack.length - 1] !== expected) {
+        start = -1;
+        stack = [];
+        continue;
+      }
+      stack.pop();
+      if (!stack.length) {
+        found.push(text.slice(start, i + 1));
+        start = -1;
+        if (found.length >= 8) break;
+      }
+    }
+  }
+  return found;
+}
+
+function translationOutputSafe(source, translated, targetLang) {
+  const src = String(source || '').trim();
+  const out = String(translated || '').trim();
+  if (!src) return out === '';
+  if (!out) return false;
+  if (TRANSLATION_LEAK_RE.test(out)) return false;
+  if (targetLang === 'th' && TRANSLATION_CJK_RE.test(out)) return false;
+  return true;
+}
+
 function parseTranslationValue(value, expectedCount, depth = 0) {
   if (depth > 8 || value == null) return null;
   if (Array.isArray(value)) {
@@ -164,12 +230,8 @@ function parseTranslationValue(value, expectedCount, depth = 0) {
 
   const text = stripModelText(value);
   if (!text) return null;
-  const candidates = [text];
-  const arrayMatch = text.match(/\[[\s\S]*\]/);
-  if (arrayMatch && arrayMatch[0] !== text) candidates.push(arrayMatch[0]);
-  const objectMatch = text.match(/\{[\s\S]*\}/);
-  if (objectMatch && objectMatch[0] !== text) candidates.push(objectMatch[0]);
-  for (const candidate of candidates) {
+  const candidates = [text, ...extractBalancedJsonCandidates(text)];
+  for (const candidate of [...new Set(candidates)]) {
     try {
       const parsed = JSON.parse(candidate);
       const normalized = parseTranslationValue(parsed, expectedCount, depth + 1);
@@ -213,7 +275,7 @@ async function runSingleTranslation(env, text, sourceLang, targetLang) {
     messages: [
       {
         role: 'system',
-        content: `Translate one subtitle from ${sourceLang || 'auto'} to ${targetLang}. Return only the translated subtitle text. No label, quote, markdown or explanation.`,
+        content: `Translate one subtitle from ${sourceLang || 'auto'} to ${targetLang}. Return only the translated subtitle text. No label, quote, markdown or explanation. If target is Thai, use Thai script only and do not echo the source text or request payload.`,
       },
       { role: 'user', content: text },
     ],
@@ -221,43 +283,63 @@ async function runSingleTranslation(env, text, sourceLang, targetLang) {
     max_tokens: 512,
   };
   const out = await env.AI.run(modelName(env), payload);
-  return extractAIText(out);
+  const parsed = parseTranslationValue(out, 1);
+  return parsed?.[0] ? String(parsed[0]).trim() : extractAIText(out);
 }
 
 async function translateWithAI(env, texts, sourceLang, targetLang, durations = []) {
   if (!env.AI) throw new Error('Workers AI binding unavailable');
   if (sourceLang === targetLang) return texts;
 
+  let batchTranslations = null;
   try {
     const batchOut = await runTranslationBatch(env, texts, sourceLang, targetLang, durations);
-    const translations = parseTranslationValue(batchOut, texts.length);
-    if (translations && translations.every(x => String(x).trim())) return translations.map(x => String(x).trim());
+    const parsed = parseTranslationValue(batchOut, texts.length);
+    if (parsed && parsed.length === texts.length) batchTranslations = parsed.map(x => String(x).trim());
   } catch (err) {
-    console.warn('Workers AI batch translation failed; retrying per subtitle', err?.message || String(err));
+    console.warn('Workers AI batch translation failed; repairing only unresolved subtitles', err?.message || String(err));
   }
 
-  const results = new Array(texts.length);
-  let successful = 0;
-  for (let start = 0; start < texts.length; start += 4) {
-    const indexes = Array.from({ length: Math.min(4, texts.length - start) }, (_, i) => start + i);
-    const values = await Promise.all(indexes.map(async idx => {
-      const original = String(texts[idx] || '');
-      if (!original.trim()) return '';
+  const results = new Array(texts.length).fill(null);
+  if (batchTranslations) {
+    for (let i = 0; i < texts.length; i += 1) {
+      if (translationOutputSafe(texts[i], batchTranslations[i], targetLang)) {
+        results[i] = batchTranslations[i];
+      }
+    }
+  }
+
+  for (let idx = 0; idx < texts.length; idx += 1) {
+    const original = String(texts[idx] || '');
+    if (!original.trim()) {
+      results[idx] = '';
+      continue;
+    }
+    if (results[idx] != null) continue;
+
+    let repaired = null;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
       try {
         const translated = await runSingleTranslation(env, original, sourceLang, targetLang);
-        if (translated) {
-          successful += 1;
-          return translated;
+        if (translationOutputSafe(original, translated, targetLang)) {
+          repaired = translated;
+          break;
         }
+        console.warn(`Workers AI single translation ${idx} attempt ${attempt} failed integrity`);
       } catch (err) {
-        console.warn(`Workers AI single translation ${idx} failed`, err?.message || String(err));
+        console.warn(`Workers AI single translation ${idx} attempt ${attempt} failed`, err?.message || String(err));
       }
-      return null;
-    }));
-    indexes.forEach((idx, i) => { results[idx] = values[i] ?? String(texts[idx] || ''); });
+      if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 180 * attempt));
+    }
+    if (repaired != null) results[idx] = repaired;
   }
 
-  if (!successful && texts.some(x => String(x).trim())) throw new Error('Workers AI translation unavailable');
+  const unresolved = results
+    .map((value, index) => (value == null ? index : -1))
+    .filter(index => index >= 0);
+  if (unresolved.length) {
+    throw new Error(`Workers AI translation unresolved indexes: ${unresolved.slice(0, 12).join(',')}`);
+  }
   return results;
 }
 
