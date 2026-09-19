@@ -73,32 +73,34 @@ assert(mixedCalls === 2, 'mixed output should trigger exactly one single-line re
 
 console.log('TRANSLATION_RUNTIME_RESILIENCE_PASS');
 
-let partialCalls = 0;
-const partialAI = {
-  async run(_model, payload) {
-    partialCalls += 1;
-    const messages = payload?.messages || [];
-    const user = String(messages[messages.length - 1]?.content || '');
+function makePartialAI() {
+  let callCount = 0;
+  return {
+    async run(_model, payload) {
+      callCount += 1;
+      const messages = payload?.messages || [];
+      const user = String(messages[messages.length - 1]?.content || '');
 
-    if (partialCalls === 1) {
-      return {
-        response: JSON.stringify({
-          translations: [
-            'หนึ่ง','สอง','สาม','สี่','ห้า','หก',
-            '七',
-            'แปด','เก้า','สิบ','สิบเอ็ด','สิบสอง',
-          ],
-        }),
-      };
-    }
+      if (callCount === 1) {
+        return {
+          response: JSON.stringify({
+            translations: [
+              'หนึ่ง','สอง','สาม','สี่','ห้า','หก',
+              '七',
+              'แปด','เก้า','สิบ','สิบเอ็ด','สิบสอง',
+            ],
+          }),
+        };
+      }
 
-    // Keep the seventh subtitle unresolved through all worker strategies.
-    if (user.includes('七') || user.includes('Meaning: 七')) {
-      return { response: '七' };
-    }
-    return { response: 'ข้อความไทย' };
-  },
-};
+      // Keep the seventh subtitle unresolved through all worker strategies.
+      if (user.includes('七') || user.includes('Meaning: 七')) {
+        return { response: '七' };
+      }
+      return { response: 'ข้อความไทย' };
+    },
+  };
+}
 
 const partialBody = {
   texts: ['一','二','三','四','五','六','七','八','九','十','十一','十二'],
@@ -107,7 +109,7 @@ const partialBody = {
   durations: new Array(12).fill(1.2),
 };
 
-const partial = await callTranslate(partialAI, partialBody);
+const partial = await callTranslate(makePartialAI(), partialBody);
 assert(partial.response.status === 200, 'one unresolved subtitle must not fail the whole batch');
 assert(
   JSON.stringify(partial.payload.unresolvedIndexes) === JSON.stringify([6]),
@@ -118,12 +120,14 @@ assert(partial.payload.translations[5] === 'หก', 'must preserve valid batch 
 assert(partial.payload.translations[6] === '七', 'unresolved slot should carry source text for runner repair');
 assert(partial.payload.translations[11] === 'สิบสอง', 'must preserve valid batch translation 12');
 
-const guardedPartial = await callTranslate(partialAI, partialBody, integrityWorker);
+const guardedPartial = await callTranslate(makePartialAI(), partialBody, integrityWorker);
 assert(guardedPartial.response.status === 200, 'integrity wrapper must allow declared unresolved slots');
 assert(
   JSON.stringify(guardedPartial.payload.unresolvedIndexes) === JSON.stringify([6]),
   'integrity wrapper must preserve unresolvedIndexes',
 );
+assert(guardedPartial.payload.translations[0] === 'หนึ่ง', 'wrapper must preserve valid batch translation 1');
+assert(guardedPartial.payload.translations[11] === 'สิบสอง', 'wrapper must preserve valid batch translation 12');
 
 console.log('TRANSLATION_PARTIAL_REPAIR_PASS');
 
