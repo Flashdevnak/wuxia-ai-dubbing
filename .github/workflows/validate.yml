@@ -80,6 +80,9 @@ jobs:
       - name: Separate Audio Pair Recovery contract
         run: node scripts/test_pair_recovery.mjs
 
+      - name: Translation runtime resilience
+        run: node scripts/test_translation_runtime.mjs
+
       - name: Python syntax check
         run: |
           python -m py_compile \
@@ -153,6 +156,7 @@ jobs:
           test -f scripts/test_prepare_audio_guard.py
           test -f scripts/test_media_pair.py
           test -f scripts/test_pair_recovery.mjs
+          test -f scripts/test_translation_runtime.mjs
           test -f scripts/dub_guard.py
           test -f scripts/dub_guard_integrity.py
           test -f scripts/r3_studio.py
@@ -163,6 +167,9 @@ jobs:
           test -f .github/workflows/thai-media-smoke.yml
           test -f .github/workflows/deploy-cloudflare.yml
           grep -q "python scripts/dub_guard_integrity.py" .github/workflows/dubbing.yml
+          grep -q "max-parallel: 2" .github/workflows/dubbing.yml
+          grep -q "GOOGLE_FALLBACK_INTERVAL_SECONDS = 0.9" scripts/dub_chunk.py
+          grep -q "TRANSLATION_RUNTIME_RESILIENCE_PASS" scripts/test_translation_runtime.mjs
           grep -q "python scripts/prepare_job_full.py" .github/workflows/dubbing.yml
           grep -q "Noto Sans Thai" .github/workflows/dubbing.yml
           grep -q "AUDIO_PROFILE_VERSION = 6" scripts/dub_guard.py

@@ -86,7 +86,7 @@ jobs:
       fail-fast: false
       # Keep aggregate Edge TTS pressure low enough that individual sentences
       # can finish reliably; each chunk also caps its own TTS concurrency.
-      max-parallel: 3
+      max-parallel: 2
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
     env:
       WORKER_URL: ${{ github.event.client_payload.workerBase || secrets.WORKER_URL }}
@@ -201,5 +201,14 @@ jobs:
               print('Job is paused; failure state will not overwrite it')
               raise SystemExit(0)
           if not current.get('error'):
-              client.fail(job['id'], 'ขั้นประมวลผลเสียงพากย์ไม่สำเร็จ กรุณาลองใหม่อีกครั้ง')
+              stage = str(current.get('stage') or '')
+              if 'แปล' in stage:
+                  message = 'ขั้นแปลภาษาไม่สำเร็จ ระบบจะลองซ่อมเฉพาะช่วงที่มีปัญหาเมื่อกดลองใหม่'
+              elif 'ถอด' in stage or 'Whisper' in stage:
+                  message = 'ขั้นถอดเสียงไม่สำเร็จ กรุณาลองใหม่อีกครั้ง'
+              elif 'พากย์' in stage or 'เสียง' in stage:
+                  message = 'ขั้นสร้างเสียงพากย์ไม่สำเร็จ กรุณาลองใหม่อีกครั้ง'
+              else:
+                  message = 'ขั้นประมวลผลเสียงพากย์ไม่สำเร็จ กรุณาลองใหม่อีกครั้ง'
+              client.fail(job['id'], message)
           PY
