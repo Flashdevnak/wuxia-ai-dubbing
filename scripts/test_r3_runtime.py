@@ -103,7 +103,7 @@ def main() -> None:
     assert 'AUDIO_PROFILE_VERSION = 6' in guard
     if integrity_wrapped_r3:
         assert 'TRANSLATION_INTEGRITY_PROFILE = 7' in integrity_guard
-    assert 'max-parallel: 3' in dubbing_workflow
+    assert 'max-parallel: 2' in dubbing_workflow
 
     print('R3 runtime integration acceptance: PASS')
 
